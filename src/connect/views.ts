@@ -27,7 +27,7 @@ function render(title: string, body: string, extraHead = ''): string {
 }
 
 const MESSAGES: Record<string, { cls: 'ok' | 'notice'; text: string }> = {
-  connected: { cls: 'ok', text: 'projo-Konto verbunden. Du kannst dieses Fenster schließen und im Chat weitermachen.' },
+  connected: { cls: 'ok', text: 'projo-Konto verbunden – dieses Fenster schließt sich gleich, danach im Chat weitermachen.' },
   disconnected: { cls: 'notice', text: 'Die Verbindung zu projo wurde getrennt.' },
 };
 
@@ -79,7 +79,7 @@ function msJobBox(job: EntraJobStatus, csrf: string): string {
         <button type="submit">Code senden</button>
       </form>
       <div class="meta">Die Anzeige aktualisiert sich automatisch – falls sich nichts tut, die Seite neu laden.</div>
-      <form id="ms-cancel" method="post" action="/connect/microsoft/cancel">
+      <form id="ms-cancel" method="post" action="/connect/microsoft/cancel" data-inplace>
         <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
         <button type="submit" class="secondary">Abbrechen</button>
       </form>
@@ -122,18 +122,51 @@ function msJobBox(job: EntraJobStatus, csrf: string): string {
     </script>`;
 }
 
+/**
+ * Formulare mit data-inplace ohne neuen Verlaufseintrag absenden (fetch + location.replace) – so bleibt ein
+ * vom Chat-Link geöffnetes Fenster per Script schließbar (Browser erlauben window.close() nur bei einem
+ * Verlaufseintrag). Ohne JavaScript greift das normale Absenden. Nach erfolgreicher Verbindung: Fenster schließen.
+ */
+const PAGE_SCRIPT = `<script>
+(() => {
+  for (const form of document.querySelectorAll('form[data-inplace]')) {
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const button = form.querySelector('button[type=submit]');
+      if (button) button.disabled = true;
+      try {
+        const res = await fetch(form.action, { method: 'POST', body: new URLSearchParams(new FormData(form)), credentials: 'same-origin' });
+        if (res.redirected) { location.replace(res.url); return; }
+        const html = await res.text();
+        history.replaceState(null, '', '/connect');
+        document.open(); document.write(html); document.close();
+      } catch (err) {
+        form.submit();
+      }
+    });
+  }
+  const hint = document.getElementById('close-hint');
+  if (hint) {
+    setTimeout(() => {
+      window.close();
+      setTimeout(() => { hint.textContent = 'projo-Konto verbunden. Du kannst dieses Fenster jetzt schließen und im Chat weitermachen.'; }, 500);
+    }, 2000);
+  }
+})();
+</script>`;
+
 export function connectPage(o: ConnectPageOpts): string {
   const msg = o.msg ? MESSAGES[o.msg] : undefined;
   const defaultProjoEmail = escapeHtml(o.status.projoEmail ?? o.email);
   const body = `
     <h1>projo verbinden</h1>
     <div class="sub">Angemeldet als ${escapeHtml(o.email)} · ${escapeHtml(config.SERVER_NAME)}</div>
-    ${msg ? `<div class="${msg.cls === 'ok' ? 'status ok' : 'notice'}">${escapeHtml(msg.text)}</div>` : ''}
+    ${msg ? `<div class="${msg.cls === 'ok' ? 'status ok' : 'notice'}"${o.msg === 'connected' ? ' id="close-hint"' : ''}>${escapeHtml(msg.text)}</div>` : ''}
     ${o.error ? `<div class="error">${escapeHtml(o.error)}</div>` : ''}
     ${statusBox(o.status)}
 
     <h2>Mit projo-E-Mail und Passwort</h2>
-    <form method="post" action="/connect/password" accept-charset="utf-8" autocomplete="off">
+    <form method="post" action="/connect/password" accept-charset="utf-8" autocomplete="off" data-inplace>
       <input type="hidden" name="csrf" value="${escapeHtml(o.csrf)}">
       <label for="projo_email">projo-E-Mail</label>
       <input id="projo_email" name="projo_email" type="email" required value="${defaultProjoEmail}" autocomplete="username">
@@ -149,7 +182,7 @@ export function connectPage(o: ConnectPageOpts): string {
 
     ${o.microsoftAvailable && !(o.msJob && ACTIVE_MS_STATES.has(o.msJob.state)) ? `
     <h2>Mit Microsoft („Mit Microsoft anmelden“ in projo)</h2>
-    <form method="post" action="/connect/microsoft" accept-charset="utf-8" autocomplete="off">
+    <form method="post" action="/connect/microsoft" accept-charset="utf-8" autocomplete="off" data-inplace>
       <input type="hidden" name="csrf" value="${escapeHtml(o.csrf)}">
       <label for="ms_email">Microsoft-Konto</label>
       <input id="ms_email" name="ms_email" type="email" required value="${defaultProjoEmail}" autocomplete="username">
@@ -162,13 +195,14 @@ export function connectPage(o: ConnectPageOpts): string {
 
     ${o.status.method ? `
     <h2>Verbindung trennen</h2>
-    <form method="post" action="/connect/disconnect">
+    <form method="post" action="/connect/disconnect" data-inplace>
       <input type="hidden" name="csrf" value="${escapeHtml(o.csrf)}">
       <button type="submit" class="danger">projo-Verbindung trennen</button>
     </form>` : ''}
 
     <div class="meta">Zugangsdaten werden nur auf dieser Seite eingegeben – nie im Chat. Gespeichert wird verschlüsselt
-      die projo-Sitzung (Cookies), ein Passwort nur auf ausdrücklichen Wunsch.</div>`;
+      die projo-Sitzung (Cookies), ein Passwort nur auf ausdrücklichen Wunsch.</div>
+    ${PAGE_SCRIPT}`;
   // Ohne JavaScript: Seite neu laden, solange die Microsoft-Anmeldung läuft (außer während der Code-Eingabe)
   const active = Boolean(o.msJob && ACTIVE_MS_STATES.has(o.msJob.state));
   const refresh = active && o.msJob?.state !== 'awaiting_code' ? '<meta http-equiv="refresh" content="3">' : '';
