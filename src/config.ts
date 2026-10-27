@@ -62,6 +62,8 @@ const configSchema = z.object({
   PROJO_STORE_PASSWORDS: boolish(true),
   // Microsoft-Cookies nach SSO-Connect behalten (stille SSO-Neuanmeldung, größere Angriffsfläche)
   PROJO_KEEP_MS_COOKIES: boolish(false),
+  // „Mit Microsoft verbinden“ auf der Verbindungsseite anbieten (braucht Chromium im Image)
+  PROJO_MS_CONNECT: boolish(true),
   PROJO_USER_AGENT: z.string().min(1).optional(),
   // Verbundene Sitzungen alle N Stunden auffrischen (projo verlängert sein Cookie rollierend); 0 = aus
   KEEPALIVE_HOURS: z.coerce.number().min(0).default(24),

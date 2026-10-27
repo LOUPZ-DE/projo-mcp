@@ -1,4 +1,5 @@
 import { config } from '../config.js';
+import type { EntraJobStatus } from '../projo/auth/entra.js';
 import type { ConnectionStatus } from '../projo/session.js';
 import { escapeHtml, widePage } from '../util/html.js';
 
@@ -21,8 +22,8 @@ const EXTRA_CSS = `
   .mfa-number { font-size: 2.5rem; font-weight: 700; text-align: center; letter-spacing: .1em; margin: .5rem 0; }
 </style>`;
 
-function render(title: string, body: string): string {
-  return widePage(title, body).replace('</head>', `${EXTRA_CSS}</head>`);
+function render(title: string, body: string, extraHead = ''): string {
+  return widePage(title, body).replace('</head>', `${EXTRA_CSS}${extraHead}</head>`);
 }
 
 const MESSAGES: Record<string, { cls: 'ok' | 'notice'; text: string }> = {
@@ -55,6 +56,70 @@ export interface ConnectPageOpts {
   error?: string;
   allowStorePassword: boolean;
   microsoftAvailable: boolean;
+  /** laufende oder gerade beendete Microsoft-Anmeldung */
+  msJob?: EntraJobStatus;
+}
+
+const ACTIVE_MS_STATES = new Set(['starting', 'microsoft', 'awaiting_approval', 'awaiting_code', 'finishing']);
+
+/**
+ * Live-Status der Microsoft-Anmeldung. Funktioniert auch ohne JavaScript: Solange die Anmeldung läuft,
+ * lädt sich die Seite per <meta refresh> neu (Zahl serverseitig gerendert). Das Script beschleunigt nur,
+ * löscht nie Inhalte und lädt bei Abschluss die Seite neu.
+ */
+function msJobBox(job: EntraJobStatus, csrf: string): string {
+  return `
+    <div id="ms-job" class="status none" data-csrf="${escapeHtml(csrf)}" data-state="${escapeHtml(job.state)}">
+      <div id="ms-msg">${escapeHtml(job.message)}</div>
+      <div id="ms-number" class="mfa-number"${job.number ? '' : ' hidden'}>${escapeHtml(job.number ?? '')}</div>
+      <form id="ms-code" method="post" action="/connect/mfa"${job.state === 'awaiting_code' ? '' : ' hidden'}>
+        <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
+        <label for="ms_code">Bestätigungscode</label>
+        <input id="ms_code" name="code" inputmode="numeric" autocomplete="one-time-code" required>
+        <button type="submit">Code senden</button>
+      </form>
+      <div class="meta">Die Anzeige aktualisiert sich automatisch – falls sich nichts tut, die Seite neu laden.</div>
+      <form id="ms-cancel" method="post" action="/connect/microsoft/cancel">
+        <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
+        <button type="submit" class="secondary">Abbrechen</button>
+      </form>
+    </div>
+    <script>
+    (() => {
+      const box = document.getElementById('ms-job');
+      if (!box) return;
+      const msg = document.getElementById('ms-msg');
+      const num = document.getElementById('ms-number');
+      const codeForm = document.getElementById('ms-code');
+      let state = box.dataset.state;
+      let timer;
+      const apply = (s) => {
+        if (!s || !s.state || s.state === 'none') return;
+        if (s.state === 'done' || s.state === 'failed') {
+          clearInterval(timer);
+          location.replace(s.state === 'done' ? '/connect?msg=connected' : '/connect');
+          return;
+        }
+        if (s.message) msg.textContent = s.message;
+        if (s.number) { num.textContent = s.number; num.hidden = false; }
+        else if (s.state !== 'awaiting_approval') num.hidden = true;
+        if (s.state === 'awaiting_code' && state !== 'awaiting_code') { codeForm.hidden = false; codeForm.querySelector('input[name=code]').focus(); }
+        if (s.state !== 'awaiting_code') codeForm.hidden = true;
+        state = s.state;
+      };
+      const poll = () => fetch('/connect/status', { cache: 'no-store', credentials: 'same-origin' }).then((r) => r.json()).then(apply).catch(() => {});
+      codeForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const data = new URLSearchParams(new FormData(codeForm));
+        codeForm.hidden = true;
+        msg.textContent = 'Code wird geprüft …';
+        fetch('/connect/mfa', { method: 'POST', credentials: 'same-origin', body: data }).finally(poll);
+        codeForm.reset();
+      });
+      timer = setInterval(poll, 1500);
+      poll();
+    })();
+    </script>`;
 }
 
 export function connectPage(o: ConnectPageOpts): string {
@@ -79,18 +144,21 @@ export function connectPage(o: ConnectPageOpts): string {
       <button type="submit">Verbinden</button>
     </form>
 
-    ${o.microsoftAvailable ? `
+    ${o.msJob && ACTIVE_MS_STATES.has(o.msJob.state) ? `<h2>Anmeldung mit Microsoft</h2>${msJobBox(o.msJob, o.csrf)}` : ''}
+    ${o.msJob?.state === 'failed' ? `<div class="error">Microsoft-Anmeldung fehlgeschlagen: ${escapeHtml(o.msJob.message)}</div>` : ''}
+
+    ${o.microsoftAvailable && !(o.msJob && ACTIVE_MS_STATES.has(o.msJob.state)) ? `
     <h2>Mit Microsoft („Mit Microsoft anmelden“ in projo)</h2>
     <form method="post" action="/connect/microsoft" accept-charset="utf-8" autocomplete="off">
       <input type="hidden" name="csrf" value="${escapeHtml(o.csrf)}">
       <label for="ms_email">Microsoft-Konto</label>
       <input id="ms_email" name="ms_email" type="email" required value="${defaultProjoEmail}" autocomplete="username">
-      <label for="ms_password">Microsoft-Passwort</label>
+      <label for="ms_password">Microsoft-Passwort (nur nötig, wenn Microsoft danach fragt – bei Anmeldung per Authenticator-App leer lassen)</label>
       <input id="ms_password" name="ms_password" type="password" autocomplete="current-password">
       <button type="submit" class="secondary">Mit Microsoft verbinden</button>
     </form>
-    <div class="meta">Der Server meldet sich dabei in einem eigenen Browser bei Microsoft an. Eine Bestätigung in der
-      Authenticator-App oder ein Code wird hier angezeigt bzw. abgefragt. Das Microsoft-Passwort wird nicht gespeichert.</div>` : ''}
+    <div class="meta">Der Server meldet sich dabei in einem eigenen Browser bei Microsoft an. Die Zahl für die
+      Authenticator-App bzw. ein Code-Feld erscheint hier. Ein Microsoft-Passwort wird nie gespeichert.</div>` : ''}
 
     ${o.status.method ? `
     <h2>Verbindung trennen</h2>
@@ -101,7 +169,10 @@ export function connectPage(o: ConnectPageOpts): string {
 
     <div class="meta">Zugangsdaten werden nur auf dieser Seite eingegeben – nie im Chat. Gespeichert wird verschlüsselt
       die projo-Sitzung (Cookies), ein Passwort nur auf ausdrücklichen Wunsch.</div>`;
-  return render('projo verbinden', body);
+  // Ohne JavaScript: Seite neu laden, solange die Microsoft-Anmeldung läuft (außer während der Code-Eingabe)
+  const active = Boolean(o.msJob && ACTIVE_MS_STATES.has(o.msJob.state));
+  const refresh = active && o.msJob?.state !== 'awaiting_code' ? '<meta http-equiv="refresh" content="3">' : '';
+  return render('projo verbinden', body, refresh);
 }
 
 /** Anmeldung an diesem Server fehlt (kein mcp_session-Cookie) → SSO-Buttons bzw. lokales Formular. */

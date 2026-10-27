@@ -14,8 +14,9 @@ import { tokenHandler } from './oauth/token.js';
 import { idpStartHandler, idpCallbackHandler } from './authn/idp/routes.js';
 import { mcpPostHandler, mcpMethodNotAllowedHandler } from './mcp/server.js';
 import { connectRouter } from './connect/routes.js';
-import { projoSessions } from './projo/runtime.js';
+import { assertDataDirUsable, browserPool, entraJobs, projoSessions } from './projo/runtime.js';
 
+assertDataDirUsable();
 loadState();
 
 const app = express();
@@ -166,10 +167,8 @@ function shutdown(signal: string): void {
   const force = setTimeout(() => process.exit(0), 8000);
   force.unref();
   server.close();
-  void projoSessions
-    .shutdown()
-    .catch(() => undefined)
-    .finally(() => process.exit(0));
+  entraJobs.shutdown();
+  void Promise.allSettled([projoSessions.shutdown(), browserPool.close()]).finally(() => process.exit(0));
 }
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));

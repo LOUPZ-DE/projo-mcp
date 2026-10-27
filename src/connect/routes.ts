@@ -5,7 +5,7 @@ import { activeIdps } from '../authn/idp/registry.js';
 import { getSession, setSession } from '../authn/session.js';
 import { users } from '../oauth/store.js';
 import { isProjoError } from '../projo/errors.js';
-import { audit, projoSessions } from '../projo/runtime.js';
+import { audit, entraJobs, projoSessions } from '../projo/runtime.js';
 import { log } from '../util/log.js';
 import { connectIdpCallback, connectIdpStart } from './idp.js';
 import { connectPage, connectSignInPage } from './views.js';
@@ -17,12 +17,6 @@ import { connectPage, connectSignInPage } from './views.js';
 
 export const connectRouter = Router();
 const formParser = express.urlencoded({ extended: false, limit: '16kb' });
-
-/** Optional: Microsoft-Connect (Browser-Modul) – wird beim Start registriert, falls verfügbar. */
-let microsoftAvailable = false;
-export function enableMicrosoftConnect(): void {
-  microsoftAvailable = true;
-}
 
 // ─── Helfer ──────────────────────────────────────────────────────────────────
 
@@ -64,7 +58,8 @@ function renderConnect(req: Request, res: Response, email: string, extra: { erro
         msg,
         error: extra.error,
         allowStorePassword: config.PROJO_STORE_PASSWORDS,
-        microsoftAvailable,
+        microsoftAvailable: config.PROJO_MS_CONNECT,
+        msJob: entraJobs.status(email),
       }),
     );
 }
@@ -114,6 +109,54 @@ connectRouter.post('/connect/disconnect', formParser, async (req, res) => {
   const removed = await projoSessions.disconnect(session.email);
   audit.write({ user: session.email, action: 'disconnect', result: 'ok', details: { removed } });
   res.redirect(303, '/connect?msg=disconnected');
+});
+
+// ─── Microsoft („Mit Microsoft anmelden“ bei projo, ausgeführt im Server-Browser) ───────────
+
+connectRouter.post('/connect/microsoft', formParser, (req, res) => {
+  const session = getSession(req);
+  if (!session) return renderSignIn(res, 'Bitte zuerst anmelden.', 401);
+  if (!config.PROJO_MS_CONNECT) return renderConnect(req, res, session.email, { error: 'Die Microsoft-Anmeldung ist auf diesem Server deaktiviert.', status: 400 });
+  const body = req.body as Record<string, unknown>;
+  if (!csrfOk(session.email, body.csrf)) return renderConnect(req, res, session.email, { error: 'Sitzung der Seite abgelaufen – bitte erneut versuchen.', status: 403 });
+  const msEmail = typeof body.ms_email === 'string' ? body.ms_email.trim() : '';
+  const msPassword = typeof body.ms_password === 'string' ? body.ms_password : '';
+  if (!/^[^\s@]+@[^\s@]+$/.test(msEmail)) return renderConnect(req, res, session.email, { error: 'Bitte das Microsoft-Konto (E-Mail) angeben.', status: 400 });
+  if (rateLimited(session.email)) return renderConnect(req, res, session.email, { error: 'Zu viele Versuche – bitte in einigen Minuten erneut probieren.', status: 429 });
+  entraJobs.start(session.email, msEmail, msPassword);
+  // eindeutige URL → der Browser lädt garantiert frisch (kein Wiederverwenden der Formularseite)
+  res.redirect(303, `/connect?ms=${Date.now().toString(36)}`);
+});
+
+/** Status der laufenden Microsoft-Anmeldung (für die Anzeige auf der Verbindungsseite, wird gepollt). */
+connectRouter.get('/connect/status', (req, res) => {
+  const session = getSession(req);
+  noStore(res);
+  if (!session) {
+    res.status(401).json({ state: 'none' });
+    return;
+  }
+  res.json(entraJobs.status(session.email) ?? { state: 'none' });
+});
+
+/** Bestätigungscode (TOTP/SMS/E-Mail) an die laufende Anmeldung übergeben. */
+connectRouter.post('/connect/mfa', formParser, (req, res) => {
+  const session = getSession(req);
+  noStore(res);
+  const asJson = req.is('application/json') === 'application/json';
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const reply = (status: number, payload: Record<string, unknown>) => (asJson ? res.status(status).json(payload) : res.redirect(303, '/connect'));
+  if (!session || !csrfOk(session.email, body.csrf)) return reply(403, { ok: false });
+  const code = typeof body.code === 'string' ? body.code.replace(/\s+/g, '') : '';
+  if (!/^\d{4,10}$/.test(code)) return reply(400, { ok: false, error: 'Der Code besteht aus 4–10 Ziffern.' });
+  return reply(200, { ok: entraJobs.submitCode(session.email, code) });
+});
+
+connectRouter.post('/connect/microsoft/cancel', formParser, (req, res) => {
+  const session = getSession(req);
+  if (!session) return renderSignIn(res, 'Bitte zuerst anmelden.', 401);
+  if (csrfOk(session.email, (req.body as Record<string, unknown>).csrf)) entraJobs.cancel(session.email);
+  res.redirect(303, '/connect');
 });
 
 // Anmeldung an diesem Server direkt hier (falls kein mcp_session-Cookie vorhanden)

@@ -40,7 +40,7 @@ Browser der Nutzerin ───────────────────�
 
 | Meilenstein | Tools | Status |
 |---|---|---|
-| M0 Fundament | `projo_status`, `projo_read_page` (generischer, nur lesender Seitenleser), Verbindungsseite | Passwort-Login fertig (offline getestet), Microsoft-Login folgt |
+| M0 Fundament | `projo_status`, `projo_read_page` (generischer, nur lesender Seitenleser), Verbindungsseite mit projo-Passwort oder Microsoft (inkl. Authenticator-Bestätigung) | fertig |
 | M1 Zeiten | `projo_time_entries`, `projo_time_summary`, `projo_time_options`, `projo_time_entry_create` / `_update` / `_delete` | fertig (gegen echtes projo getestet) |
 | M2 Abwesenheiten | Urlaubskonto, Abwesenheitsliste, Urlaubsantrag, Team-Ansicht | geplant |
 | M3 Projektführung lesen | Projekte, Verträge, Leistungs-/Rechnungs-/Zahlungsstand, offene Rechnungen | geplant |

@@ -78,7 +78,9 @@ curl https://<domain>/.well-known/oauth-protected-resource     # resource = http
 
 ## Hinweise
 
-- **Microsoft-Login bei projo** (für Konten ohne projo-Passwort) ist noch in Arbeit (Meilenstein M0.7). Bis dahin
-  verbinden sich Nutzer auf `/connect` mit projo-E-Mail und -Passwort.
+- **Microsoft-Login bei projo:** Auf `/connect` → „Mit Microsoft verbinden“ meldet sich der Server-Browser an; die
+  Zahl für die Authenticator-App bzw. ein Code-Feld erscheint auf der Seite. Microsofts Risikoerkennung kann Anmeldungen
+  aus Rechenzentren zusätzlich prüfen oder blockieren – ggf. die ausgehende Server-IP als Named Location eintragen.
+  Ein Microsoft-Passwort wird nie gespeichert; bei kennwortloser Anmeldung wird keins gebraucht.
 - Logs sind JSON-Zeilen auf stdout (EasyPanel → Logs); Passwörter, Codes und Cookies werden nie geloggt.
 - Update: Push auf `main` → in EasyPanel neu deployen (oder Auto-Deploy aktivieren). Der Tresor bleibt erhalten.

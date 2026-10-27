@@ -38,7 +38,7 @@ User's browser ─────────────────────�
 
 | Milestone | Tools | Status |
 |---|---|---|
-| M0 Foundation | `projo_status`, `projo_read_page` (generic read-only page reader), connect page | password sign-in done (tested offline), Microsoft sign-in pending |
+| M0 Foundation | `projo_status`, `projo_read_page` (generic read-only page reader), connect page with projo password or Microsoft (incl. Authenticator approval) | done |
 | M1 Time tracking | `projo_time_entries`, `projo_time_summary`, `projo_time_options`, `projo_time_entry_create` / `_update` / `_delete` | done (tested against real projo) |
 | M2 Absences | vacation balance, absence list, absence requests, team view | planned |
 | M3 Project controlling (read) | projects, contracts, performance / invoicing / payment status, open invoices | planned |

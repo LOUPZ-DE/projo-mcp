@@ -94,6 +94,23 @@ behandelt, Sitzung bleibt gültig). Der Session-Manager unterscheidet das per Ko
 Verifiziert am 2026-10-27 mit einer echten Testbuchung über die MCP-Tools: anlegen → Doppelbuchungsschutz →
 Dauer, Beschreibung, Leistung ändern → löschen.
 
+## Anmeldung „Mit Microsoft“ (Server-Browser)
+
+Verifiziert am 2026-10-28 (lokal, kennwortlose Anmeldung per Authenticator-App):
+
+- `POST /auth/entra_id` → `login.microsoftonline.com/common/oauth2/v2.0/authorize` (klassische Oberfläche:
+  `input[name=loginfmt]` + `#idSIButton9`; das Passwortfeld `input[name=passwd]` liegt dort bereits unsichtbar per
+  `.moveOffScreen` außerhalb des Bildschirms → Sichtbarkeit immer inkl. Viewport prüfen).
+- Konten mit Passkey werden nach der E-Mail auf `login.microsoft.com/common/bridge/fido` geleitet – ein
+  Server-Browser kann das nicht bedienen. Meldet der Browser **kein WebAuthn** (`PublicKeyCredential` undefined),
+  fällt Microsoft auf die nächste Methode zurück: hier **„Anmeldung genehmigen“** mit Zahl in
+  `#idRemoteNGC_DisplaySign` (Beschreibung `#idDiv_RemoteNGC_PollingDescription`), kein Passwort nötig.
+- Push nach Passwort (Number Matching): `#idDiv_SAOTCAS_Description` + Zahl in `#idRichContext_DisplaySign`;
+  Code: `input[name=otc]`; „Angemeldet bleiben?“: `#KmsiDescription`, Ja `#idSIButton9`, Nein `#idBtn_Back`.
+- Danach Callback zu projo, die Sitzung steht. Gespeichert werden standardmäßig nur die projo-Cookies.
+- Entwicklungsfalle: `tsx`/esbuild fügt Funktionen `__name()`-Aufrufe hinzu, die in `page.evaluate()` im Browser
+  fehlen → Skripte für `evaluate` als Text übergeben.
+
 ## Gefährliche Links (nie automatisch auslösen)
 
 - `DELETE /app/dates/<datum>` – „Arbeitszeiten des ganzen Tages löschen“
