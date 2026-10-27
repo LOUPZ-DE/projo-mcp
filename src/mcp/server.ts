@@ -25,7 +25,10 @@ function createMcpServer(): McpServer {
       name: config.SERVER_NAME,
       version: '0.1.0',
       websiteUrl: config.BASE_URL,
-      icons: [{ src: `${config.BASE_URL}/icon.png`, mimeType: 'image/png', sizes: ['256x256'] }],
+      icons: [
+        { src: `${config.BASE_URL}/icon.png`, mimeType: 'image/png', sizes: ['256x256'] },
+        { src: `${config.BASE_URL}/icon.svg`, mimeType: 'image/svg+xml', sizes: ['any'] },
+      ],
     },
     { instructions: INSTRUCTIONS },
   );

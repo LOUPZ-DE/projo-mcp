@@ -47,6 +47,10 @@ const iconPng = readFileSync(new URL('../assets/icon.png', import.meta.url));
 app.get('/icon.png', (_req, res) => {
   res.set('Content-Type', 'image/png').set('Cache-Control', 'public, max-age=86400').send(iconPng);
 });
+const iconSvg = readFileSync(new URL('../assets/icon.svg', import.meta.url));
+app.get('/icon.svg', (_req, res) => {
+  res.set('Content-Type', 'image/svg+xml').set('Cache-Control', 'public, max-age=86400').send(iconSvg);
+});
 
 // Notion-Konvention: Discovery-Dokument für MCP-Clients (Name, Beschreibung, Icon).
 // Notion ruft diese Datei beim Verbinden tatsächlich ab (sichtbar im Request-Log).

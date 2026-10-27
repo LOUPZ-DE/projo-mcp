@@ -90,6 +90,9 @@ All settings are environment variables – see [`.env.example`](.env.example) fo
 
 ## Deployment notes
 
+Step-by-step guide (German): [`docs/deployment.md`](docs/deployment.md).
+
+
 - Run **exactly one instance** (file-based vault and per-user locks live in the process).
 - Put it behind HTTPS (most MCP clients require it); mount a persistent volume on `/data`.
 - Give the container ≥ 1 GB RAM; Chromium is only started when needed.

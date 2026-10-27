@@ -94,6 +94,9 @@ Alle Einstellungen sind Umgebungsvariablen – die vollständige, kommentierte L
 
 ## Betrieb
 
+Schritt-für-Schritt-Anleitung (Entra-App, Secrets, EasyPanel, Prüfung): [`docs/deployment.md`](docs/deployment.md).
+
+
 - **Genau eine Instanz** betreiben (dateibasierter Tresor und Sperren pro Nutzer leben im Prozess).
 - Hinter HTTPS betreiben (die meisten MCP-Clients verlangen das); ein persistentes Volume auf `/data` mounten.
 - Mindestens 1 GB RAM einplanen; Chromium startet nur bei Bedarf.
