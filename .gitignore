@@ -1,0 +1,18 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+state.json
+/data/
+.claude/
+
+# Discovery/Training: Roh-HTML, Mitschnitte und Sitzungen enthalten personenbezogene Daten
+/discovery/
+/training/
+*.har
+storageState*.json
+.playwright-cli/
+test-results/

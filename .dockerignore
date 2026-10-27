@@ -1,0 +1,13 @@
+node_modules
+dist
+.git
+.claude
+.env
+.env.*
+!.env.example
+*.log
+*.md
+Dockerfile
+.dockerignore
+data
+state.json
