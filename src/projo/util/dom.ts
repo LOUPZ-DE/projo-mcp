@@ -10,6 +10,34 @@ export function textOf($: CheerioAPI, el: AnyNode | Cheerio<AnyNode>): string {
   return cleanText($(el).text());
 }
 
+/** Elemente, deren Inhalt vom Nachbartext getrennt wird (cheerio.text() klebt sonst „1 Tag“+„von 5 Tage“ zusammen). */
+const SEPARATED = new Set([
+  'br', 'div', 'p', 'li', 'ul', 'ol', 'tr', 'td', 'th', 'table', 'small', 'span', 'label', 'button', 'a',
+  'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'section', 'header', 'footer', 'font', 'b', 'strong', 'i', 'em',
+]);
+const SKIPPED = new Set(['script', 'style', 'noscript', 'template', 'svg']);
+
+/** Lesbarer Text eines Knotens: Elementgrenzen werden zu Leerzeichen, Skripte entfallen. */
+export function readableText(node: AnyNode | undefined): string {
+  if (!node) return '';
+  const parts: string[] = [];
+  const walk = (n: AnyNode): void => {
+    if (n.type === 'text') {
+      parts.push((n as unknown as { data: string }).data);
+      return;
+    }
+    if (!('children' in n)) return;
+    const name = 'name' in n ? String((n as { name: string }).name).toLowerCase() : '';
+    if (SKIPPED.has(name)) return;
+    const sep = SEPARATED.has(name);
+    if (sep) parts.push(' ');
+    for (const c of (n as { children: AnyNode[] }).children) walk(c);
+    if (sep) parts.push(' ');
+  };
+  walk(node);
+  return cleanText(parts.join(''));
+}
+
 /**
  * Nur Links auf denselben Host durchlassen und auf Pfad + Query kürzen.
  * Anker, javascript:, mailto: usw. → undefined.

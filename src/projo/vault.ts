@@ -46,6 +46,8 @@ export interface VaultRecord {
   connectedAt: string;
   lastValidatedAt?: string;
   lastUsedAt?: string;
+  /** gesetzt, wenn die Sitzung abgelaufen ist und keine stille Neuanmeldung möglich war */
+  sessionExpiredAt?: string;
 }
 
 interface VaultFile {

@@ -1,0 +1,133 @@
+import { createHmac, timingSafeEqual } from 'node:crypto';
+import express, { Router, type Request, type Response } from 'express';
+import { config } from '../config.js';
+import { activeIdps } from '../authn/idp/registry.js';
+import { getSession, setSession } from '../authn/session.js';
+import { users } from '../oauth/store.js';
+import { isProjoError } from '../projo/errors.js';
+import { audit, projoSessions } from '../projo/runtime.js';
+import { log } from '../util/log.js';
+import { connectIdpCallback, connectIdpStart } from './idp.js';
+import { connectPage, connectSignInPage } from './views.js';
+
+/**
+ * Verbindungsseite /connect: Hier (und nur hier) gibt eine Person ihre projo-Zugangsdaten ein.
+ * Identität = Template-Login (`mcp_session`-Cookie aus dem OAuth-Connect oder Anmeldung direkt hier).
+ */
+
+export const connectRouter = Router();
+const formParser = express.urlencoded({ extended: false, limit: '16kb' });
+
+/** Optional: Microsoft-Connect (Browser-Modul) – wird beim Start registriert, falls verfügbar. */
+let microsoftAvailable = false;
+export function enableMicrosoftConnect(): void {
+  microsoftAvailable = true;
+}
+
+// ─── Helfer ──────────────────────────────────────────────────────────────────
+
+/** CSRF-Token der Verbindungsseite: an die angemeldete Identität gebunden (HMAC mit SESSION_SECRET). */
+export function connectCsrf(email: string): string {
+  return createHmac('sha256', config.SESSION_SECRET).update(`connect-csrf:${email.toLowerCase()}`).digest('base64url');
+}
+
+function csrfOk(email: string, token: unknown): boolean {
+  if (typeof token !== 'string') return false;
+  const a = Buffer.from(token);
+  const b = Buffer.from(connectCsrf(email));
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/** Max. 5 Verbindungsversuche pro Person in 10 Minuten (schützt projo-Konten vor Durchprobieren). */
+const attempts = new Map<string, number[]>();
+function rateLimited(email: string): boolean {
+  const now = Date.now();
+  const list = (attempts.get(email) ?? []).filter((t) => t > now - 10 * 60_000);
+  list.push(now);
+  attempts.set(email, list);
+  return list.length > 5;
+}
+
+function noStore(res: Response): Response {
+  return res.set('Cache-Control', 'no-store').set('X-Frame-Options', 'DENY').set('Referrer-Policy', 'no-referrer');
+}
+
+function renderConnect(req: Request, res: Response, email: string, extra: { error?: string; status?: number } = {}): void {
+  const msg = typeof req.query.msg === 'string' ? req.query.msg : undefined;
+  noStore(res)
+    .status(extra.status ?? 200)
+    .send(
+      connectPage({
+        email,
+        status: projoSessions.status(email),
+        csrf: connectCsrf(email),
+        msg,
+        error: extra.error,
+        allowStorePassword: config.PROJO_STORE_PASSWORDS,
+        microsoftAvailable,
+      }),
+    );
+}
+
+function renderSignIn(res: Response, error?: string, status = 200): void {
+  noStore(res)
+    .status(status)
+    .send(connectSignInPage({ idps: activeIdps.map((p) => ({ key: p.key, displayName: p.displayName })), localEnabled: config.localEnabled, error }));
+}
+
+// ─── Routen ──────────────────────────────────────────────────────────────────
+
+connectRouter.get('/connect', (req, res) => {
+  const session = getSession(req);
+  if (!session) return renderSignIn(res);
+  renderConnect(req, res, session.email);
+});
+
+connectRouter.post('/connect/password', formParser, async (req, res) => {
+  const session = getSession(req);
+  if (!session) return renderSignIn(res, 'Bitte zuerst anmelden.', 401);
+  const body = req.body as Record<string, unknown>;
+  if (!csrfOk(session.email, body.csrf)) return renderConnect(req, res, session.email, { error: 'Sitzung der Seite abgelaufen – bitte erneut versuchen.', status: 403 });
+  const projoEmail = typeof body.projo_email === 'string' ? body.projo_email.trim() : '';
+  const password = typeof body.projo_password === 'string' ? body.projo_password : '';
+  if (!projoEmail || !password) return renderConnect(req, res, session.email, { error: 'Bitte projo-E-Mail und Passwort angeben.', status: 400 });
+  if (rateLimited(session.email)) return renderConnect(req, res, session.email, { error: 'Zu viele Versuche – bitte in einigen Minuten erneut probieren.', status: 429 });
+
+  try {
+    await projoSessions.connectWithPassword(session.email, projoEmail, password, body.store_password === '1');
+    audit.write({ user: session.email, action: 'connect.password', result: 'ok', details: { projoEmail, storePassword: body.store_password === '1' } });
+    res.redirect(303, '/connect?msg=connected');
+  } catch (err) {
+    const message = isProjoError(err) ? err.message : 'Unerwarteter Fehler beim Verbinden.';
+    audit.write({ user: session.email, action: 'connect.password', result: 'error', details: { projoEmail }, error: isProjoError(err) ? err.code : 'error' });
+    if (!isProjoError(err)) log('error', 'Connect: Passwort-Login fehlgeschlagen', { error: err instanceof Error ? err.message : String(err) });
+    renderConnect(req, res, session.email, { error: message, status: 400 });
+  }
+});
+
+connectRouter.post('/connect/disconnect', formParser, async (req, res) => {
+  const session = getSession(req);
+  if (!session) return renderSignIn(res, 'Bitte zuerst anmelden.', 401);
+  if (!csrfOk(session.email, (req.body as Record<string, unknown>).csrf)) {
+    return renderConnect(req, res, session.email, { error: 'Sitzung der Seite abgelaufen – bitte erneut versuchen.', status: 403 });
+  }
+  const removed = await projoSessions.disconnect(session.email);
+  audit.write({ user: session.email, action: 'disconnect', result: 'ok', details: { removed } });
+  res.redirect(303, '/connect?msg=disconnected');
+});
+
+// Anmeldung an diesem Server direkt hier (falls kein mcp_session-Cookie vorhanden)
+connectRouter.post('/connect/login', formParser, (req, res) => {
+  if (!config.localEnabled) return renderSignIn(res, 'Lokale Anmeldung ist deaktiviert.', 400);
+  const body = req.body as Record<string, unknown>;
+  const email = typeof body.email === 'string' ? body.email.toLowerCase() : '';
+  const user = users.get(email);
+  if (!user || user.password !== body.password) return renderSignIn(res, 'E-Mail oder Passwort falsch.', 401);
+  setSession(res, { email: user.email, name: user.name, idp: 'local' });
+  res.redirect(303, '/connect');
+});
+
+connectRouter.get('/connect/auth/:provider/start', connectIdpStart);
+connectRouter.get('/connect/auth/:provider/callback', (req, res, next) => {
+  void connectIdpCallback(req, res).catch(next);
+});

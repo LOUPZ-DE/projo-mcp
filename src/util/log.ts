@@ -10,7 +10,12 @@ export function log(level: LogLevel, msg: string, data?: Record<string, unknown>
   else console.log(line);
 }
 
-const REDACT_KEYS = new Set(['password', 'code_verifier', 'client_secret', 'refresh_token', 'access_token', 'code']);
+const REDACT_KEYS = new Set([
+  'password', 'code_verifier', 'client_secret', 'refresh_token', 'access_token', 'code',
+  // projo-Schicht: Zugangsdaten, MFA-Codes, CSRF-Token, Cookies/Sitzungen
+  'session[password]', 'projo_password', 'ms_password', 'otp', 'mfa_code', 'csrf',
+  'authenticity_token', 'cookie', 'cookies', 'storageState',
+]);
 
 function redact(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(redact);

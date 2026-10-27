@@ -57,8 +57,12 @@ Felder `bookings[<task_id>][<YYYY-MM-DD>]` mit Wert `"08:00 h"`; gesperrte Tage 
   `time_tracking_booking[duration_in_hour_min_str]` (`"00:00 h"`, 15-min-Raster in der UI),
   `time_tracking_booking[task_id]` (select `#task_select`), `time_tracking_booking[description]`, `commit=Arbeitszeit buchen`.
 - Das Task-Select enthält nur die Leistungen des **gefilterten Vertrags**. Der Vertragsfilter
-  („Filtern auf Vertrag“) ist ein `PATCH /app/dates/<datum>/filter_treaty?filtered_treaty_id=` mit Nebenwirkung
-  (Nutzereinstellung) → nicht für Lesezugriffe verwenden. Die Vertragsliste (Code, Titel, `<treaty_id>`) steht in den Links.
+  („Filtern auf Vertrag“) ist ein `PATCH /app/dates/<datum>/filter_treaty?filtered_treaty_id=<treaty_id>&user_id=`
+  (XHR, Nutzereinstellung). Die **Antwort (JS) enthält das Leistungs-Select des Vertrags mit vollen Namen** – große
+  HOAI-Verträge haben mehrere hundert Leistungen mit langen Pfaden („Leistungsstufe 2 - … - Standort“).
+  `projo_time_options` nutzt das gezielt und stellt den Filter danach immer zurück: Die ID des aktiven Vertrags steht
+  nicht im Chip, sondern im Link „alle Leistungen“ (`structure_bookings/new?treaty_id=`); ohne aktiven Vertrag =
+  `filter_treaty?user_id=` ohne ID. Verträge und Leistungen unterscheiden sich je Person und Büro.
 - Option: `value=<task_id>`, `data-time-tracking-leaf-url=/time_tracking/leaves/<leaf_id>`; „Pause“ hat `value=" "`.
 - **Alle** buchbaren Leistungen: `GET /app/bookings/<booking_id>/edit_task?date=&user_id=` (XHR) liefert ein select2 mit
   allen Leistungen über alle Verträge (`<Vertragscode> - <Pfad>`, lange Namen in der Mitte mit „ ... “ gekürzt).
@@ -81,12 +85,22 @@ Felder `bookings[<task_id>][<YYYY-MM-DD>]` mit Wert `"08:00 h"`; gesperrte Tage 
 angelegt, ein ungültiger Dauerwert mit 204 quittiert. Das MCP-Tool muss deshalb selbst prüfen (Leistung Pflicht,
 Dauer > 0 im 15-min-Raster) und nach jedem Write die Tagesansicht auswerten (Antwort oder `refresh`).
 
+**CSRF:** Das Buchungsformular verschachtelt ein inneres Formular (`action="/time_tracking/bookings"`), dessen
+`authenticity_token` ein *formularbezogenes* Token für dieses andere Ziel ist. Für `POST /app/bookings` reicht es
+allein nicht – rails-ujs schickt zusätzlich das globale Token aus `<meta name="csrf-token">` als `X-CSRF-Token`.
+Fehlt das, antwortet projo mit `200` und JavaScript `Turbo.visit("…/login")` (Request als „nicht angemeldet“
+behandelt, Sitzung bleibt gültig). Der Session-Manager unterscheidet das per Kontroll-GET von echtem Sitzungsablauf.
+
+Verifiziert am 2026-10-27 mit einer echten Testbuchung über die MCP-Tools: anlegen → Doppelbuchungsschutz →
+Dauer, Beschreibung, Leistung ändern → löschen.
+
 ## Gefährliche Links (nie automatisch auslösen)
 
 - `DELETE /app/dates/<datum>` – „Arbeitszeiten des ganzen Tages löschen“
 - `PATCH /user/users/<user_id>/change_online_status?…` – Online-Status
 - `PATCH /user/settings/<id>?user_setting[absence_display_option]=…` – Ansichtseinstellungen
-- `PATCH /user/settings/<id>/change_to_absence_list_and_redirect`, `PATCH …/filter_treaty`, `PATCH …/leaf_chosen`
+- `PATCH /user/settings/<id>/change_to_absence_list_and_redirect`, `PATCH …/leaf_chosen`
+  (`PATCH …/filter_treaty` nutzt nur `projo_time_options` gezielt – mit Wiederherstellung)
 - `POST /app/breaks?date=` – Pause anlegen
 - `DELETE /logout`
 

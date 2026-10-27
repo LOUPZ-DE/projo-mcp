@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Bei projo anmelden</title>
+    <meta name="csrf-param" content="authenticity_token" />
+    <meta name="csrf-token" content="meta-csrf-token" />
+  </head>
+  <body class="">
+    <div class="container-responsive">
+      <div class="card">
+        <div class="card-header"><h1>Bei projo anmelden</h1></div>
+        <div class="card-body">
+          <div id="flash_container_for_bip">{{FLASH}}</div>
+          <form class="simple_form mb-4" data-turbo="false" novalidate="novalidate" action="/login" accept-charset="UTF-8" method="post"><input type="hidden" name="authenticity_token" value="{{TOKEN}}" autocomplete="off" />
+            <div class="form-inputs">
+              <div class="form-group email required session_email"><label class="form-control-label email required" for="session_email">Email <abbr title="Pflicht">*</abbr></label><input class="form-control string email required" type="email" name="session[email]" id="session_email" /></div>
+              <div class="form-group password required session_password"><label class="form-control-label password required" for="session_password">Passwort <abbr title="Pflicht">*</abbr></label><input class="form-control password required" type="password" name="session[password]" id="session_password" /></div>
+            </div>
+            <div class="form-actions d-flex flex-row-reverse gap-3">
+              <input type="submit" name="commit" value="Anmelden" class="btn btn btn-primary" data-disable-with="Anmelden" />
+            </div>
+          </form>
+          <hr>
+          <form data-turbo="false" action="/auth/entra_id" accept-charset="UTF-8" method="post"><input type="hidden" name="authenticity_token" value="sso-token" autocomplete="off" />
+            <button class="btn btn-light d-flex gap-2">Mit Microsoft anmelden</button>
+          </form>
+        </div>
+        <div class="card-footer"><a href="/password_resets/new">Passwort vergessen?</a></div>
+      </div>
+    </div>
+  </body>
+</html>

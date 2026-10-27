@@ -77,6 +77,14 @@ export function csrfFromPage($: CheerioAPI): string | undefined {
   return $('meta[name="csrf-token"]').attr('content') ?? $('input[name="authenticity_token"]').first().attr('value');
 }
 
+/**
+ * XHR-Antworten leiten nicht per 302 um, sondern per JavaScript: `Turbo.visit("…/login")`.
+ * So reagiert projo auf eine abgelaufene Sitzung – und auf ein abgelehntes CSRF-Token.
+ */
+export function isJsLoginRedirect(res: { contentType: string; body: string }): boolean {
+  return /javascript/i.test(res.contentType) && /(Turbo\.visit|location(\.href)?\s*=)\s*\(?\s*["'][^"']*\/login["'?]/.test(res.body.slice(0, 2000));
+}
+
 export class ProjoHttp {
   private lastRequestAt = 0;
 
@@ -115,6 +123,7 @@ export class ProjoHttp {
         continue;
       }
       this.assertStatus(res, current);
+      if (!opts.allowLoginPage && isJsLoginRedirect(res)) throw new SessionExpiredError();
       const html = /javascript/i.test(res.contentType) ? extractHtmlFromJs(res.body) : res.body;
       const $ = cheerio.load(html);
       if (!opts.allowLoginPage && looksLikeLoginPage($)) throw new SessionExpiredError();
@@ -127,7 +136,7 @@ export class ProjoHttp {
   async send(method: HttpMethod, path: string, opts: SendOptions = {}): Promise<ProjoResponse> {
     const res = await this.request(method, path, opts);
     if (isRedirect(res.status) && isLoginPath(res.location)) throw new SessionExpiredError();
-    if (res.status === 401) throw new SessionExpiredError();
+    if (res.status === 401 || isJsLoginRedirect(res)) throw new SessionExpiredError();
     return res;
   }
 

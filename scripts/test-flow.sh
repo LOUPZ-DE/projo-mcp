@@ -10,7 +10,7 @@
 #   EMAIL=test@example.com  PASSWORD=test1234   (the .env.example user)
 #
 # Covers: 401 discovery, well-known docs, DCR, PKCE flow (login form → code →
-# tokens), negative tests (code replay, plain PKCE), MCP tools, refresh
+# tokens), negative tests (code replay, plain PKCE), projo tools (status, blocked path), refresh
 # rotation, health, 405 on GET /mcp.
 #
 set -euo pipefail
@@ -79,18 +79,18 @@ echo "--- 5a. initialize ---"
 curl -s -X POST "$BASE/mcp" "${MCP_HEADERS[@]}" \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test-flow","version":"0"}}}' | head -2
 
-echo "--- 5b. tools/call whoami ---"
+echo "--- 5b. tools/list (expect projo tools) ---"
 curl -s -X POST "$BASE/mcp" "${MCP_HEADERS[@]}" \
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"whoami","arguments":{}}}' | grep -o '"text":.*' | head -c 400
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' | grep -o '"name":"projo_[a-z_]*"' | sort -u
+
+echo "--- 5c. tools/call projo_status (arguments={}) ---"
+curl -s -X POST "$BASE/mcp" "${MCP_HEADERS[@]}" \
+  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"projo_status","arguments":{}}}' | grep -o '"text":.*' | head -c 600
 echo ""
 
-echo "--- 5c. tools/call echo ---"
+echo "--- 5d. tools/call projo_read_page with blocked path (expect error code blocked) ---"
 curl -s -X POST "$BASE/mcp" "${MCP_HEADERS[@]}" \
-  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"echo","arguments":{"text":"hello notion"}}}' | grep -o 'hello notion'
-
-echo "--- 5d. tools/call slow_task (2s) ---"
-curl -s -X POST "$BASE/mcp" "${MCP_HEADERS[@]}" \
-  -d '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"slow_task","arguments":{"seconds":2}}}' | grep -o '2 Sekunden gewartet.'
+  -d '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"projo_read_page","arguments":{"path":"/logout"}}}' | grep -o 'blocked' | head -1
 
 echo "--- 5e. GET /mcp with token (expect 405) ---"
 curl -s -o /dev/null -w '%{http_code}\n' "$BASE/mcp" -H "Authorization: Bearer $AT"

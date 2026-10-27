@@ -1,10 +1,9 @@
 import type { Request, Response } from 'express';
-import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { config } from '../config.js';
 import { log } from '../util/log.js';
-import { respond } from './respond.js';
+import { registerProjoTools } from './tools/index.js';
 
 /**
  * Ebene 1 der Selbsterklärung: `instructions` im InitializeResult.
@@ -12,9 +11,10 @@ import { respond } from './respond.js';
  * ersten Tool-Aufruf bereit. Knapp halten: Arbeitsablauf, Regeln, Grenzen.
  */
 const INSTRUCTIONS = [
-  'This server is an OAuth/DCR reference with four test tools.',
-  'Suggested order: 1) whoami — verify authentication and identity passthrough (shows email, name, idp, notionUserId). 2) echo — verify argument passing. 3) slow_task — verify timeout behavior. 4) log_note — the only writing tool (writes to the server log, non-destructive).',
-  'Rules: echo, slow_task and log_note require arguments; call whoami with arguments={}. slow_task caps at 60 seconds. Tool answers are JSON text blocks; when a "nextSteps" field is present, prefer those follow-ups.',
+  'Dieser Server bedient die Controlling-Software projo (my.projo.berlin) mit dem eigenen projo-Konto der angemeldeten Person.',
+  'Ablauf: 1) projo_status aufrufen (arguments={}). 2) Ist kein projo-Konto verbunden oder die Sitzung abgelaufen, der Person den connectUrl-Link nennen – sie verbindet ihr Konto dort im Browser; niemals Passwörter oder Codes im Chat erfragen. 3) Danach die fachlichen Tools nutzen; für Ansichten ohne eigenes Tool projo_read_page mit einem projo-Pfad.',
+  'Zeiten: lesen mit projo_time_entries (Tag/Zeitraum) bzw. projo_time_summary (Stunden pro Projekt); buchen: projo_time_options (query oder contract) → taskId → projo_time_entry_create; ändern/löschen braucht die bookingId aus projo_time_entries (Zeitraum bis 10 Tage). Vor dem Buchen Datum, Dauer und Leistung mit der Person abstimmen, wenn sie nicht eindeutig sind.',
+  'Regeln: Daten im ISO-Format (YYYY-MM-DD), Stunden dezimal. Links mit "method" (patch/delete/post) sind Aktionen und werden nie über projo_read_page ausgelöst. Antworten sind JSON; ein "nextSteps"-Feld nennt sinnvolle Folgeaufrufe, ein "error"-Feld enthält code, message und ggf. connectUrl.',
 ].join(' ');
 
 function createMcpServer(): McpServer {
@@ -23,125 +23,20 @@ function createMcpServer(): McpServer {
   const server = new McpServer(
     {
       name: config.SERVER_NAME,
-      version: '1.0.0',
+      version: '0.1.0',
       websiteUrl: config.BASE_URL,
       icons: [{ src: `${config.BASE_URL}/icon.png`, mimeType: 'image/png', sizes: ['256x256'] }],
     },
     { instructions: INSTRUCTIONS },
   );
-
-  // 1. whoami — verifiziert Identity-Passthrough: liest die Identität aus dem Bearer-Token.
-  // Bewusst OHNE inputSchema registriert: Das SDK zod-validiert sonst auch `undefined`
-  // (abgelehnt mit -32602), obwohl `arguments` in der MCP-Spec optional ist. Ohne Schema
-  // akzeptiert der Server den Call mit weggelassenem arguments UND mit {}.
-  server.registerTool(
-    'whoami',
-    {
-      // Ebene 2: Beschreibung benennt den Folgeschritt.
-      description: 'Returns the authenticated user of this MCP server (email, name, idp, notionUserId). Start here to verify auth, then try echo for argument passing.',
-      // title + annotations (siehe README-Abschnitt "Tool annotations"): clients wie Notion
-      // zeigen title statt des snake_case-Namens und steuern Auto-Run vs. Nachfragen.
-      title: 'Who am I (identity check)',
-      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    },
-    async (extra) => {
-      const authInfo = extra.authInfo;
-      if (!authInfo) {
-        return respond({ status: 'unauthenticated', hint: 'no AuthInfo on request (should not happen — bearer middleware guards /mcp)' });
-      }
-      const identity = {
-        email: authInfo.extra?.email,
-        name: authInfo.extra?.name,
-        idp: authInfo.extra?.idp,
-        notionUserId: authInfo.extra?.notionUserId,
-        clientId: authInfo.clientId,
-        scopes: authInfo.scopes,
-        expiresAt: authInfo.expiresAt ? new Date(authInfo.expiresAt * 1000).toISOString() : undefined,
-      };
-      // Ebene 3: nextSteps — konkret ausgefüllt, konditional (hier: immer sinnvoll)
-      return respond(identity, [
-        'echo with {"text": "<any string>"} to verify argument passing',
-        `slow_task with {"seconds": 3} to verify timeout behavior (token expires ${identity.expiresAt ?? 'unknown'})`,
-        'log_note with {"note": "..."} — the write-tier demo (readOnlyHint: false, destructiveHint: false)',
-      ]);
-    },
-  );
-
-  // 2. echo — verifiziert Argument-Übergabe
-  server.registerTool(
-    'echo',
-    {
-      description: 'Echoes the given text back. Verifies argument passing; for auth identity use whoami instead.',
-      title: 'Echo text',
-      inputSchema: { text: z.string().describe('The text to echo back') },
-      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    },
-    async ({ text }) =>
-      respond(
-        { echo: text, length: text.length },
-        // nextSteps konditional: langer Input → Hinweis auf slow_task als nächstes Experiment
-        text.length > 200
-          ? ['slow_task with {"seconds": 5} to verify timeout behavior with longer-running calls']
-          : ['whoami to verify which identity this call carries'],
-      ),
-  );
-
-  // 3. slow_task — verifiziert Timeout-Verhalten (honoriert Abort via extra.signal)
-  server.registerTool(
-    'slow_task',
-    {
-      description: 'Waits n seconds, then answers. Verifies client timeout behavior. Cap: 60s.',
-      title: 'Slow task (timeout test)',
-      inputSchema: {
-        seconds: z.number().min(0).max(60).default(5).describe('Wait time in seconds (max. 60)'),
-      },
-      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    },
-    async ({ seconds }, extra) => {
-      const deadline = Date.now() + seconds * 1000;
-      while (Date.now() < deadline) {
-        if (extra.signal.aborted) {
-          return respond({ aborted: true, waitedSeconds: Math.round((seconds * 1000 - (deadline - Date.now())) / 1000) });
-        }
-        await new Promise((r) => setTimeout(r, Math.min(250, deadline - Date.now())));
-      }
-      return respond(
-        { waitedSeconds: seconds },
-        // Konditional: nahe am Cap → Hinweis auf die 60s-Grenze als Folgeexperiment
-        seconds >= 30
-          ? ['values above 60 are rejected by the schema — that cap is the demonstration']
-          : [`slow_task with {"seconds": ${Math.min(60, seconds * 4)}} to approach the client timeout`],
-      );
-    },
-  );
-
-  // 4. log_note — SCHREIBT (ins Server-Log), aber nicht destruktiv:
-  // die "mittlere Stufe" der Tool-Annotations (readOnlyHint: false + destructiveHint: false).
-  // Ein Client kann das anders behandeln als echte destruktive Writes — ohne die explizite
-  // Angabe würde der Default (destructiveHint: true bei readOnlyHint: false) greifen.
-  server.registerTool(
-    'log_note',
-    {
-      description: 'Writes a note to the server log. The write-tier demo: it writes, but changes nothing destructively (like a draft, not a send).',
-      title: 'Write note to server log',
-      inputSchema: { note: z.string().min(1).max(500).describe('The note to write to the server log') },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-    },
-    async ({ note }, extra) => {
-      const email = extra.authInfo?.extra?.email ?? 'unknown';
-      log('info', 'log_note', { note, email });
-      return respond({ logged: true, note, by: email }, [
-        'whoami to see which identity wrote this note',
-      ]);
-    },
-  );
-
+  registerProjoTools(server);
   return server;
 }
 
 /**
  * Stateless Streamable HTTP: pro Request frischer Server + Transport.
  * Kein Session-Store nötig — passt zum Container-Betrieb (horizontal skalierbar, sticky-frei).
+ * (Die projo-Sitzungen leben unabhängig davon als Modul-Singletons in src/projo/runtime.ts.)
  */
 export async function mcpPostHandler(req: Request, res: Response): Promise<void> {
   const server = createMcpServer();

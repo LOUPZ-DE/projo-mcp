@@ -13,6 +13,8 @@ import { authorizeGetHandler, authorizePostHandler } from './oauth/authorize.js'
 import { tokenHandler } from './oauth/token.js';
 import { idpStartHandler, idpCallbackHandler } from './authn/idp/routes.js';
 import { mcpPostHandler, mcpMethodNotAllowedHandler } from './mcp/server.js';
+import { connectRouter } from './connect/routes.js';
+import { projoSessions } from './projo/runtime.js';
 
 loadState();
 
@@ -53,7 +55,7 @@ app.get('/.well-known/mcp.json', corsMiddleware, (_req, res) => {
     .set('Cache-Control', 'public, max-age=300')
     .json({
       name: config.SERVER_NAME,
-      description: `${config.SERVER_NAME} — MCP-Server mit OAuth 2.1 + DCR (Referenz-Implementierung)`,
+      description: `${config.SERVER_NAME} — MCP-Server für projo: Zeiten, Abwesenheiten und Projektführung mit dem eigenen projo-Konto`,
       icon: `${config.BASE_URL}/icon.png`,
       endpoint: config.MCP_RESOURCE,
     });
@@ -81,6 +83,9 @@ app.get('/auth/:provider/callback', idpCallbackHandler);
 // Token Endpoint
 app.post('/token', corsMiddleware, formParser, tokenHandler);
 
+// Verbindungsseite für das projo-Konto (Zugangsdaten nur hier, nie im Chat)
+app.use(connectRouter);
+
 // MCP Endpoint — Bearer-Middleware VOR dem 405-Handler, damit jede Methode unauthentifiziert 401 liefert.
 // MCP läuft bewusst NUR auf /mcp (keine Root-Auslieferung): Auf einem Host, der auch eine
 // herkömmliche API bedient, muss der MCP-Endpunkt ein eigener Pfad bleiben. In Notion muss
@@ -103,18 +108,19 @@ app.all('/mcp', corsMiddleware, bearerAuth, (req: Request, res: Response, next: 
 app.get('/', (_req, res) => {
   const body = `
     <h1>${escapeHtml(config.SERVER_NAME)}</h1>
-    <div class="sub">Remote-MCP-Server mit OAuth 2.1 + Dynamic Client Registration (Test)</div>
+    <div class="sub">Inoffizieller MCP-Server für projo – mit dem eigenen projo-Konto</div>
     <table>
       <tr><td>MCP-Endpoint</td><td><span class="url">${escapeHtml(config.MCP_RESOURCE)}</span></td></tr>
+      <tr><td>projo verbinden</td><td><a href="/connect">${escapeHtml(config.CONNECT_URL)}</a></td></tr>
       <tr><td>PRM (RFC 9728)</td><td><a href="${escapeHtml(config.PRM_URL)}">${escapeHtml(config.PRM_URL)}</a></td></tr>
       <tr><td>AS-Metadata (RFC 8414)</td><td><a href="${escapeHtml(config.BASE_URL)}/.well-known/oauth-authorization-server">${escapeHtml(config.BASE_URL)}/.well-known/oauth-authorization-server</a></td></tr>
       <tr><td>DCR (RFC 7591)</td><td><span class="url">POST ${escapeHtml(config.BASE_URL)}/register</span></td></tr>
       <tr><td>Health</td><td><a href="/health">/health</a></td></tr>
     </table>
     <div class="meta">
-      In Notion als Custom MCP Server die <b>MCP-Endpoint-URL inkl. /mcp</b> eintragen —
-      Notion verwendet die eingegebene URL als Endpunkt für den gesamten MCP-Traffic.
-      Tools: <code>whoami</code> · <code>echo</code> · <code>slow_task</code>
+      Im MCP-Client (Claude, Notion …) die <b>MCP-Endpoint-URL inkl. /mcp</b> als Custom Connector eintragen.
+      Tools: <code>projo_status</code> · <code>projo_read_page</code> · <code>projo_time_entries</code> · <code>projo_time_summary</code> ·
+      <code>projo_time_options</code> · <code>projo_time_entry_create</code> · <code>projo_time_entry_update</code> · <code>projo_time_entry_delete</code>
     </div>`;
   res.set('Cache-Control', 'no-store').status(200).send(widePage('Info', body));
 });
@@ -128,7 +134,7 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   if (!res.headersSent) res.status(500).json({ error: 'internal_error' });
 });
 
-app.listen(config.PORT, () => {
+const server = app.listen(config.PORT, () => {
   log('info', `${config.SERVER_NAME} läuft`, {
     port: config.PORT,
     baseUrl: config.BASE_URL,
@@ -137,5 +143,29 @@ app.listen(config.PORT, () => {
     authProviders: config.AUTH_PROVIDERS,
     users: config.USERS.length,
     stateFile: config.STATE_FILE ?? '(in-memory)',
+    projo: config.PROJO_BASE_URL,
+    dataDir: config.DATA_DIR,
+    keepAliveHours: config.KEEPALIVE_HOURS,
+    llmFallback: config.harnessEnabled,
   });
 });
+
+// projo verlängert sein Sitzungs-Cookie bei jedem Request → regelmäßiger Keep-alive hält Verbindungen aktiv
+projoSessions.startKeepAlive(config.KEEPALIVE_HOURS);
+
+// Graceful Shutdown: Docker Swarm/EasyPanel gibt 10 s – keine neuen Requests, Sitzungen schließen, raus.
+let shuttingDown = false;
+function shutdown(signal: string): void {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  log('info', 'Herunterfahren', { signal });
+  const force = setTimeout(() => process.exit(0), 8000);
+  force.unref();
+  server.close();
+  void projoSessions
+    .shutdown()
+    .catch(() => undefined)
+    .finally(() => process.exit(0));
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

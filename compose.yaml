@@ -1,0 +1,20 @@
+# Lokaler Betrieb (Docker Desktop, OrbStack, …):
+#   docker compose up --build
+# Gleiche Architektur wie ein typischer Server (amd64) testen:
+#   DOCKER_DEFAULT_PLATFORM=linux/amd64 docker compose up --build
+# Konfiguration aus .env (siehe .env.example); Daten landen in ./data (gitignored).
+services:
+  projo-mcp:
+    build: .
+    image: projo-mcp:local
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+      STATE_FILE: /data/state.json
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/data
+    init: true
+    shm_size: 256m
+    restart: unless-stopped

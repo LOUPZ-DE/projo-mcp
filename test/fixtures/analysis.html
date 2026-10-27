@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+  <head><title>Zeiten</title></head>
+  <body>
+    <form action="https://my.projo.berlin/app/bookings_analysis" method="get">
+      <input type="hidden" name="user_id" value="1001"><input name="date" value="01.03.2026"><input name="end_date" value="10.03.2026">
+    </form>
+    <table class="table table-hover">
+      <tr><th>geleistete Stunden pro Projekt</th><th class="text-end">132:00 h</th><th class="text-end">100,00 %</th></tr>
+      <tr>
+        <td><span class="label text-nowrap"><span title="Neubau Musterschule">1000-Projekt</span></span></td>
+        <td class="text-end">110:00 h</td>
+        <td class="text-end">83,33 %</td>
+      </tr>
+      <tr>
+        <td><span class="label text-nowrap"><span title="Interne Leistungen">2000-Intern</span></span> <i class="bi bi-ban" title="keine Projektkosten"></i></td>
+        <td class="text-end">22:00 h</td>
+        <td class="text-end">16,67 %</td>
+      </tr>
+      <tr><th><br>Abwesenheiten <span class="text-muted" title="reduziert Sollstunden"><i class="bi bi-info-circle"></i></span></th><th class="text-end"><br>24:00 h</th><th class="text-end"><br>100,00 %</th></tr>
+      <tr><td><span style="background-color: #7bd148" class="label">Urlaub</span></td><td class="text-end">24:00 h</td><td class="text-end">100,00 %</td></tr>
+      <tr><th><br>Summe Ist-Stunden gesamt</th><th class="text-end"><br>156:00 h</th><th></th></tr>
+      <tr><th><br>Sollstunden</th><th class="text-end"><br>152:00 h</th><th></th></tr>
+    </table>
+  </body>
+</html>

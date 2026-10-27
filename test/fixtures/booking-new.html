@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>10.03.2026: Arbeitszeit</title>
+    <meta name="csrf-token" content="meta-csrf-token" />
+  </head>
+  <body>
+    <div id="create_booking_form">
+      <form data-controller="input--duration" class="simple_form new_time_tracking_booking" id="new_time_tracking_booking" novalidate="novalidate" action="https://my.projo.berlin/app/bookings?date=2026-03-10&amp;user_id=1001" accept-charset="UTF-8" data-remote="true" method="post">
+        <div class="modal-body">
+          <div class="filter_of_treaties">
+            <b>Filtern auf Vertrag :</b><br>
+            <div class="d-flex flex-wrap gap-2">
+              <div class="mb-1"><a data-remote="true" rel="nofollow" data-method="patch" href="https://my.projo.berlin/app/dates/2026-03-10/filter_treaty?filtered_treaty_id=700001&amp;user_id=1001"><span class="label label-sub text-nowrap"><span title="Neubau Musterschule">1000-Projekt-01</span></span></a></div>
+              <div class="mb-1 highlight"><a data-remote="true" rel="nofollow" data-method="patch" href="https://my.projo.berlin/app/dates/2026-03-10/filter_treaty?user_id=1001"><span class="label label-sub text-nowrap"><span title="Interne Leistungen">2000-Intern-08</span></span></a></div>
+              <div class="mb-1"><a data-remote="true" rel="nofollow" data-method="patch" href="https://my.projo.berlin/app/dates/2026-03-10/choose_break?user_id=1001"><span class="label label-sub text-nowrap"><span title="Pause">Pause</span></span></a></div>
+            </div>
+          </div>
+          <div class="form-inputs" data-controller="focus">
+            <table class="table table-borderless">
+              <thead><tr><th>Dauer</th><th>Leistung</th><th>Rechnungskommentar</th></tr></thead>
+              <tr>
+                <td>
+                  <div class="form-group string optional time_tracking_booking_duration_in_hour_min_str"><input class="form-control string optional" data-controller="input--timepicker" type="text" value="00:00 h" name="time_tracking_booking[duration_in_hour_min_str]" id="time_tracking_booking_duration_in_hour_min_str" /></div>
+                </td>
+                <td>
+                  <div id="filtered_tasks_as_input">
+                    <form class="simple_form new_time_tracking_booking" id="new_time_tracking_booking" novalidate="novalidate" action="/time_tracking/bookings" accept-charset="UTF-8" method="post"><input type="hidden" name="authenticity_token" value="form-csrf-token" autocomplete="off" />
+                      <div class="form-group select optional time_tracking_booking_task_id">
+                        <select class="form-control select optional" id="task_select" data-placeholder="auswählen" data-controller="time-tracking-leaf" name="time_tracking_booking[task_id]">
+                          <option value="" label=" "></option>
+                          <option data-time-tracking-leaf-url="/time_tracking/leaves/5000001" value="6000001">Hardware</option>
+                          <option data-time-tracking-leaf-url="/time_tracking/leaves/5000002" value="6000002">IT-Support</option>
+                          <option data-time-tracking-leaf-url="/time_tracking/leaves/5000003" value="6000003">Eigenentwicklungen - Werkzeug A</option>
+                          <option value=" ">Pause</option>
+                        </select>
+                      </div>
+                    </form>
+                  </div>
+                  <a class="btn btn-light" data-remote="true" href="https://my.projo.berlin/app/structure_bookings/new?treaty_id=700002&amp;user_id=1001">alle Leistungen</a>
+                </td>
+                <td>
+                  <div class="form-group text optional time_tracking_booking_description"><textarea class="form-control text optional" name="time_tracking_booking[description]" id="time_tracking_booking_description">
+</textarea></div>
+                </td>
+              </tr>
+            </table>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <input type="submit" name="commit" value="Arbeitszeit buchen" class="btn btn-primary js-prevent-submission" data-disable-with="Arbeitszeit buchen" />
+        </div>
+      </form>
+    </div>
+  </body>
+</html>

@@ -7,8 +7,8 @@ All-in-One-Controlling-Software für Planungsbüros. Damit können KI-Assistente
 Arbeitszeiten buchen, Arbeitszeitkonto und Abwesenheiten abfragen und Daten aus der Projektführung lesen – jeweils
 mit dem eigenen projo-Konto der Nutzerin bzw. des Nutzers.
 
-> ⚠️ **Status: frühe Entwicklung.** Das Fundament (Meilenstein M0) entsteht gerade; die meisten Tools unten sind
-> geplant. Kein offizielles Produkt der projo GmbH.
+> ⚠️ **Status: frühe Entwicklung.** Fundament und Zeiterfassung (M0/M1) funktionieren, weitere Bereiche sind geplant.
+> Kein offizielles Produkt der projo GmbH.
 
 ## Warum
 
@@ -40,8 +40,8 @@ Browser der Nutzerin ───────────────────�
 
 | Meilenstein | Tools | Status |
 |---|---|---|
-| M0 Fundament | `projo_status`, `projo_read_page` (generischer, nur lesender Seitenleser) | in Arbeit |
-| M1 Zeiten | `projo_time_entries`, `projo_time_options`, `projo_time_entry_create` / `_update` / `_delete` | geplant |
+| M0 Fundament | `projo_status`, `projo_read_page` (generischer, nur lesender Seitenleser), Verbindungsseite | Passwort-Login fertig (offline getestet), Microsoft-Login folgt |
+| M1 Zeiten | `projo_time_entries`, `projo_time_summary`, `projo_time_options`, `projo_time_entry_create` / `_update` / `_delete` | fertig (gegen echtes projo getestet) |
 | M2 Abwesenheiten | Urlaubskonto, Abwesenheitsliste, Urlaubsantrag, Team-Ansicht | geplant |
 | M3 Projektführung lesen | Projekte, Verträge, Leistungs-/Rechnungs-/Zahlungsstand, offene Rechnungen | geplant |
 | M4 Projektführung schreiben | Rechnungsentwürfe, Positionen, Preisübersichten (Entwurf + ausdrückliche Bestätigung) | geplant |

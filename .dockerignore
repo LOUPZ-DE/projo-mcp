@@ -9,5 +9,13 @@ dist
 *.md
 Dockerfile
 .dockerignore
+compose.yaml
 data
 state.json
+discovery
+training
+test
+test-results
+docs
+.playwright-cli
+*.har

@@ -1,7 +1,7 @@
 import * as cheerio from 'cheerio';
 import type { Cheerio, CheerioAPI } from 'cheerio';
 import type { Element } from 'domhandler';
-import { cleanText, isSensitiveName, toInternalPath } from '../util/dom.js';
+import { cleanText, isSensitiveName, readableText, toInternalPath } from '../util/dom.js';
 
 /**
  * Generischer Seiten-Leser: macht aus einer server-gerenderten Projo-Seite eine strukturierte,
@@ -118,9 +118,9 @@ export function summarizePage(html: string, opts: SummarizeOptions): PageSummary
 
   return {
     title: cleanText($('title').first().text()),
-    headings: uniq($('h1, h2, h3').toArray().map((h) => cleanText($(h).text()))).slice(0, 20),
-    breadcrumb: uniq($('.breadcrumb li, nav[aria-label="breadcrumb"] li').toArray().map((li) => cleanText($(li).text()))),
-    flash: uniq($('#flash_container_for_bip, .alert, [role="alert"], .flash').toArray().map((el) => cleanText($(el).text()))),
+    headings: uniq($('h1, h2, h3').toArray().map((h) => readableText(h))).slice(0, 20),
+    breadcrumb: uniq($('.breadcrumb li, nav[aria-label="breadcrumb"] li').toArray().map((li) => readableText(li))),
+    flash: uniq($('#flash_container_for_bip, .alert, [role="alert"], .flash').toArray().map((el) => readableText(el))),
     tables,
     forms,
     links,
@@ -138,11 +138,23 @@ interface Cell {
 }
 
 /** colspan auflösen, damit Zellen und Überschriften über den Index zusammenpassen. */
+/** Zelltext; reine Eingabezellen (z. B. Wochenraster) liefern ihre Feldwerte. */
+function cellText($: CheerioAPI, c: Element): string {
+  const text = readableText(c);
+  if (text) return text;
+  const values = $(c)
+    .find('input[value]:not([type=hidden]):not([type=checkbox]):not([type=radio]), textarea, select option[selected]')
+    .toArray()
+    .map((e) => cleanText(e.tagName === 'textarea' || e.tagName === 'option' ? $(e).text() : $(e).attr('value')))
+    .filter(Boolean);
+  return values.join(' | ');
+}
+
 function expandCells($: CheerioAPI, cells: Element[]): Cell[] {
   const out: Cell[] = [];
   for (const c of cells) {
     const span = Math.min(Math.max(parseInt($(c).attr('colspan') ?? '1', 10) || 1, 1), 50);
-    const text = cleanText($(c).text());
+    const text = cellText($, c);
     out.push({ text });
     for (let i = 1; i < span; i++) out.push({ text: '' });
   }
@@ -345,7 +357,7 @@ function collectDataUrls($: CheerioAPI, baseUrl: string): string[] {
 function extractText($: CheerioAPI, max: number): string {
   const body = $('body').clone();
   body.find('script, style, noscript, svg, template, nav, .navbar, footer, select, table, .modal, .dropdown-menu').remove();
-  const text = cleanText(body.text());
+  const text = readableText(body.get(0));
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 

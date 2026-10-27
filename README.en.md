@@ -7,7 +7,7 @@ controlling software for architecture and engineering offices. It lets AI assist
 book working hours, look up time accounts and absences, and query project controlling data in projo – with each
 user's own projo account.
 
-> ⚠️ **Status: early development.** The foundation (milestone M0) is being built; most tools below are planned.
+> ⚠️ **Status: early development.** Foundation and time tracking (M0/M1) work; further areas are planned.
 > Not affiliated with or endorsed by projo GmbH.
 
 ## Why
@@ -38,8 +38,8 @@ User's browser ─────────────────────�
 
 | Milestone | Tools | Status |
 |---|---|---|
-| M0 Foundation | `projo_status`, `projo_read_page` (generic read-only page reader) | in progress |
-| M1 Time tracking | `projo_time_entries`, `projo_time_options`, `projo_time_entry_create` / `_update` / `_delete` | planned |
+| M0 Foundation | `projo_status`, `projo_read_page` (generic read-only page reader), connect page | password sign-in done (tested offline), Microsoft sign-in pending |
+| M1 Time tracking | `projo_time_entries`, `projo_time_summary`, `projo_time_options`, `projo_time_entry_create` / `_update` / `_delete` | done (tested against real projo) |
 | M2 Absences | vacation balance, absence list, absence requests, team view | planned |
 | M3 Project controlling (read) | projects, contracts, performance / invoicing / payment status, open invoices | planned |
 | M4 Project controlling (write) | invoice drafts, positions, price overviews (drafts + explicit confirmation) | planned |

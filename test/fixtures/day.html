@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Zeiten</title>
+    <meta name="csrf-param" content="authenticity_token" />
+    <meta name="csrf-token" content="meta-csrf-token" />
+    <script>console.log('nicht im Text erwarten');</script>
+  </head>
+  <body>
+    <nav class="navbar navbar-expand-lg">
+      <ul class="navbar-nav">
+        <li class="nav-item"><a class="nav-link" href="https://my.projo.berlin/app">Persönlicher Bereich</a></li>
+        <li class="nav-item"><a class="nav-link" href="https://my.projo.berlin/app/logged_ins">Teambereich</a></li>
+        <li class="nav-item"><a class="nav-link" rel="nofollow" data-method="patch" href="https://my.projo.berlin/user/settings/2001/change_to_absence_list_and_redirect">Abwesenheit</a></li>
+      </ul>
+      <ul class="navbar-nav navbar-expand">
+        <li class="nav-item dropdown">
+          <button class="btn nav-link dropdown-toggle" id="userDropdown" data-turbo="false" data-bs-toggle="dropdown">
+            <span class="d-none d-lg-inline"><span>Erika Mustermann<div class="led-box"><div class="led bg-success" title="angemeldet"></div></div></span></span>
+          </button>
+          <div class="dropdown-menu">
+            <a class="dropdown-item" href="https://my.projo.berlin/app/employees/1001/contact_data">Mein Profil</a>
+            <a class="dropdown-item" rel="nofollow" data-method="delete" href="https://my.projo.berlin/logout">Abmelden</a>
+          </div>
+        </li>
+      </ul>
+    </nav>
+    <div class="container-fluid main">
+      <div id="flash_container_for_bip"></div>
+      <div id="show">
+        <h2>
+          <a class="btn btn-light" href="https://my.projo.berlin/app/dates/2026-03-09?user_id=1001"><i class="bi bi-chevron-left"></i></a>
+          <span class="alert alert-"><a id="datepicker" data-remote="true" href="https://my.projo.berlin/general/navigation/datepicker?current_date=2026-03-10">Dienstag, 10.03.2026</a></span>
+        </h2>
+        <div class="d-flex justify-content-end gap-2">
+          <a class="btn btn-light" data-remote="true" rel="nofollow" data-method="post" href="https://my.projo.berlin/app/breaks?date=2026-03-10&amp;user_id=1001">Pause</a>
+          <a data-modal="true" class=" btn btn-primary" href="https://my.projo.berlin/app/bookings/new?date=2026-03-10&amp;user_id=1001">Zeitbuchung</a>
+          <a rel="nofollow" data-method="delete" href="https://my.projo.berlin/app/dates/2026-03-10?user_id=1001">Arbeitszeiten des ganzen Tages löschen</a>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-bordered table-hover table-sortable" data-update-order-url="https://my.projo.berlin/app/bookings/update_order?date=2026-03-10&amp;user_id=1001">
+            <thead>
+              <tr>
+                <th style="width: 15%">Dauer</th>
+                <th style="width: 40%"><div class="d-flex justify-content-between">Leistung <i id="time-tracking-clock-icon" class="bi bi-clock d-none"></i></div></th>
+                <th style="width: 40%">Rechnungskommentar <span class="text-muted" title="Diese Anmerkung kann in der Rechnung erscheinen."><i class="bi bi-info-circle"></i></span></th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="sortable-parent">
+              <tr id="booking-900000001" data-row-id="900000001" class="sortable" data-controller="input--duration">
+                <td class='text-nowrap'>
+                  <span data-bip-type="input" data-bip-attribute="duration_in_hour_min_str" data-bip-object="time_tracking_booking" data-bip-original-content="02:30 h" data-bip-url="https://my.projo.berlin/app/bookings/900000001?date=2026-03-10&amp;user_id=1001" data-bip-value="02:30 h" class="best_in_place duration" id="best_in_place_time_tracking_booking_900000001_duration_in_hour_min_str">02:30 h</span>
+                </td>
+                <td class='text-nowrap'>
+                  <span id='booking_900000001'>
+                    <a data-remote="true" href="https://my.projo.berlin/app/bookings/900000001/edit_task?date=2026-03-10&amp;user_id=1001">
+                      <span class="label text-nowrap" style="background-color: #22C998; font-size: 100%" title="Planung - Leistungsphase 2">1000-Projekt-01 - Planung - Leistungsphase 2</span>
+                    </a>
+                  </span>
+                </td>
+                <td>
+                  <span data-bip-type="textarea" data-bip-attribute="description" data-bip-object="time_tracking_booking" data-bip-url="https://my.projo.berlin/app/bookings/900000001?date=2026-03-10&amp;user_id=1001" class="best_in_place" id="best_in_place_time_tracking_booking_900000001_description">Abstimmung mit Fachplanern</span>
+                </td>
+                <td class='text-nowrap'>
+                  <a title="Arbeitszeit-Buchung löschen" data-remote="true" rel="nofollow" data-method="delete" href="https://my.projo.berlin/app/bookings/900000001?date=2026-03-10&amp;user_id=1001"><i class="bi bi-trash"></i></a>
+                  <a data-modal="true" title="Arbeitszeit-Buchung kopieren" href="https://my.projo.berlin/app/bookings/new?copied_booking=900000001&amp;date=2026-03-10&amp;user_id=1001"><i class="bi bi-copy"></i></a>
+                </td>
+              </tr>
+              <tr id="booking-900000002" data-row-id="900000002" class="sortable" data-controller="input--duration">
+                <td class='text-nowrap'>
+                  <span data-bip-type="input" data-bip-attribute="duration_in_hour_min_str" data-bip-object="time_tracking_booking" data-bip-url="https://my.projo.berlin/app/bookings/900000002?date=2026-03-10&amp;user_id=1001" data-bip-value="05:30 h" class="best_in_place duration" id="best_in_place_time_tracking_booking_900000002_duration_in_hour_min_str">05:30 h</span>
+                </td>
+                <td class='text-nowrap'>
+                  <span id='booking_900000002'>
+                    <a data-remote="true" href="https://my.projo.berlin/app/bookings/900000002/edit_task?date=2026-03-10&amp;user_id=1001">
+                      <span class="label text-nowrap" style="background-color: #22C998; font-size: 100%" title="IT-Support">2000-Intern-08 - IT-Support</span>
+                    </a>
+                  </span>
+                </td>
+                <td>
+                  <span data-bip-type="textarea" data-bip-attribute="description" data-bip-object="time_tracking_booking" data-bip-url="https://my.projo.berlin/app/bookings/900000002?date=2026-03-10&amp;user_id=1001" class="best_in_place" id="best_in_place_time_tracking_booking_900000002_description"></span>
+                </td>
+                <td class='text-nowrap'>
+                  <a title="Arbeitszeit-Buchung löschen" data-remote="true" rel="nofollow" data-method="delete" href="https://my.projo.berlin/app/bookings/900000002?date=2026-03-10&amp;user_id=1001"><i class="bi bi-trash"></i></a>
+                </td>
+              </tr>
+              <tr>
+                <td><b>08:00 h</b></td>
+                <td></td>
+                <td></td>
+                <td></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

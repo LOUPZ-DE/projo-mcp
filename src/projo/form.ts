@@ -28,6 +28,11 @@ export interface ParsedForm {
   submitters: { name: string; value: string }[];
   /** data-remote="true" → rails-ujs schickt per XHR und erwartet JavaScript */
   remote: boolean;
+  /**
+   * Token für den X-CSRF-Token-Header – wie rails-ujs das globale Token aus `<meta name="csrf-token">`.
+   * Das Formularfeld `authenticity_token` kann ein formularbezogenes Token für ein ANDERES Ziel sein
+   * (projo verschachtelt Formulare) und würde allein abgelehnt.
+   */
   csrfToken?: string;
 }
 
@@ -84,7 +89,7 @@ export function extractForm($: CheerioAPI, selector: string, baseUrl: string): P
     controls,
     submitters,
     remote: form.attr('data-remote') === 'true',
-    csrfToken: controls.find((c) => c.name === 'authenticity_token')?.value ?? csrfFromPage($),
+    csrfToken: csrfFromPage($) ?? controls.find((c) => c.name === 'authenticity_token')?.value,
   };
 }
 
