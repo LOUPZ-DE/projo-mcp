@@ -3,6 +3,8 @@ import { ProjoError } from '../errors.js';
 import { submitForm } from '../form.js';
 import { csrfFromPage } from '../http.js';
 import { extractHtmlFromJs } from '../util/dom.js';
+import { parseWithFallback } from '../../harness/fallback.js';
+import { analysisSpec, daySpec, monthSpec } from '../pages/time-fallback.js';
 import { log } from '../../util/log.js';
 import {
   parseAllTasks,
@@ -121,40 +123,48 @@ export interface TimeEntriesResult {
   days: { date: string; bookings: Booking[]; totalHours: number; balance?: string }[];
   totalHours: number;
   months?: { month: string; title?: string; summary: MonthView['summary'] }[];
+  /** true = mindestens eine Seite per KI-Ausweich-Extraktion gelesen (projo-Oberfläche geändert) */
+  degraded?: boolean;
 }
 
 export async function timeEntries(sessions: ProjoSessionManager, email: string, from: string, to: string): Promise<TimeEntriesResult> {
   validateRange(from, to);
   return sessions.withUser(email, async (ctx) => {
     const uid = await sessions.userId(ctx);
+    let degraded = false;
     if (daysInclusive(from, to) <= DAY_MODE_MAX_DAYS) {
       const days: TimeEntriesResult['days'] = [];
       for (let d = from; d <= to; d = addDays(d, 1)) {
-        const { view } = await readDay(ctx, uid, d);
-        if (view.bookings.length > 0) days.push(view);
+        const page = await ctx.http.getPage(dayPath(uid, d));
+        const r = await parseWithFallback(page.html, () => parseDayView(page.$, d), daySpec(d));
+        degraded ||= r.degraded;
+        if (r.value.bookings.length > 0) days.push(r.value);
       }
-      return { from, to, source: 'tagesansicht', days, totalHours: roundHours(days.reduce((s, d) => s + d.totalHours, 0)) };
+      return { from, to, source: 'tagesansicht', days, totalHours: roundHours(days.reduce((s, d) => s + d.totalHours, 0)), ...(degraded ? { degraded } : {}) };
     }
     const days: TimeEntriesResult['days'] = [];
     const months: NonNullable<TimeEntriesResult['months']> = [];
     for (const m of monthsBetween(from, to)) {
       const page = await ctx.http.getPage(`/app/months?date=${m}&user_id=${uid}`);
-      const mv = parseMonthView(page.$, Number(m.slice(0, 4)));
+      const r = await parseWithFallback(page.html, () => parseMonthView(page.$, Number(m.slice(0, 4))), monthSpec(m.slice(0, 7)));
+      degraded ||= r.degraded;
+      const mv = r.value;
       months.push({ month: m.slice(0, 7), ...(mv.title ? { title: mv.title } : {}), summary: mv.summary });
       days.push(...mv.days.filter((d) => d.date >= from && d.date <= to && d.bookings.length > 0));
     }
-    return { from, to, source: 'monatsansicht', days, totalHours: roundHours(days.reduce((s, d) => s + d.totalHours, 0)), months };
+    return { from, to, source: 'monatsansicht', days, totalHours: roundHours(days.reduce((s, d) => s + d.totalHours, 0)), months, ...(degraded ? { degraded } : {}) };
   });
 }
 
-export async function hoursSummary(sessions: ProjoSessionManager, email: string, from: string, to: string): Promise<HoursAnalysis & { from: string; to: string }> {
+export async function hoursSummary(sessions: ProjoSessionManager, email: string, from: string, to: string): Promise<HoursAnalysis & { from: string; to: string; degraded?: boolean }> {
   assertIsoDate(from, 'from');
   assertIsoDate(to, 'to');
   if (to < from) throw new ProjoError('invalid_input', '„to“ liegt vor „from“.');
   return sessions.withUser(email, async (ctx) => {
     const uid = await sessions.userId(ctx);
     const page = await ctx.http.getPage(`/app/bookings_analysis?user_id=${uid}&date=${toGermanDate(from)}&end_date=${toGermanDate(to)}`);
-    return { from, to, ...parseHoursAnalysis(page.$) };
+    const r = await parseWithFallback(page.html, () => parseHoursAnalysis(page.$), analysisSpec());
+    return { from, to, ...r.value, ...(r.degraded ? { degraded: true } : {}) };
   });
 }
 

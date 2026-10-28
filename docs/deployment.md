@@ -82,5 +82,8 @@ curl https://<domain>/.well-known/oauth-protected-resource     # resource = http
   Zahl für die Authenticator-App bzw. ein Code-Feld erscheint auf der Seite. Microsofts Risikoerkennung kann Anmeldungen
   aus Rechenzentren zusätzlich prüfen oder blockieren – ggf. die ausgehende Server-IP als Named Location eintragen.
   Ein Microsoft-Passwort wird nie gespeichert; bei kennwortloser Anmeldung wird keins gebraucht.
+- **KI-Reserve (optional):** `REQUESTY_API_KEY`, `REQUESTY_BASE_URL` (EU), `REQUESTY_MODEL` setzen. Greift nur beim Lesen,
+  wenn sich die projo-Oberfläche geändert hat; bereinigte Schnappschüsse und Reparaturvorschläge liegen 7 Tage in
+  `/data/drift` (Grundlage für Parser-Updates). In Requesty Logging am Key abschalten und nur EU-Modelle freigeben.
 - Logs sind JSON-Zeilen auf stdout (EasyPanel → Logs); Passwörter, Codes und Cookies werden nie geloggt.
 - Update: Push auf `main` → in EasyPanel neu deployen (oder Auto-Deploy aktivieren). Der Tresor bleibt erhalten.

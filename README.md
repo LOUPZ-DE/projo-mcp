@@ -42,6 +42,7 @@ Browser der Nutzerin ───────────────────�
 |---|---|---|
 | M0 Fundament | `projo_status`, `projo_read_page` (generischer, nur lesender Seitenleser), Verbindungsseite mit projo-Passwort oder Microsoft (inkl. Authenticator-Bestätigung) | fertig |
 | M1 Zeiten | `projo_time_entries`, `projo_time_summary`, `projo_time_options`, `projo_time_entry_create` / `_update` / `_delete` | fertig (gegen echtes projo getestet) |
+| Optional: KI-Reserve | Scheitert ein Parser an einer geänderten projo-Seite, liest ein LLM (z. B. über Requesty, EU) dieselben Daten nach festem Schema – Ergebnis als `degraded` markiert, Drift-Schnappschuss + Reparaturvorschlag in `DATA_DIR/drift` (7 Tage). Nie für Schreibvorgänge. | fertig |
 | M2 Abwesenheiten | Urlaubskonto, Abwesenheitsliste, Urlaubsantrag, Team-Ansicht | geplant |
 | M3 Projektführung lesen | Projekte, Verträge, Leistungs-/Rechnungs-/Zahlungsstand, offene Rechnungen | geplant |
 | M4 Projektführung schreiben | Rechnungsentwürfe, Positionen, Preisübersichten (Entwurf + ausdrückliche Bestätigung) | geplant |

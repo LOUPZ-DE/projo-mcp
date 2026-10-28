@@ -9,6 +9,8 @@ import { runTool, type Caller } from './common.js';
 
 const isoDate = (what: string) => z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Format YYYY-MM-DD').describe(what);
 const READ = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true } as const;
+const DEGRADED_HINT =
+  'Achtung: Die projo-Oberfläche hat sich geändert, die Werte wurden per KI-Ausweich-Extraktion gelesen (degraded: true) – vor Entscheidungen in projo gegenprüfen.';
 
 /** Schreibaktion protokollieren (ohne Beschreibungstexte) und Fehler weiterreichen. */
 async function audited<T extends WriteResult>(caller: Caller, action: string, details: Record<string, unknown>, fn: () => Promise<T>): Promise<T> {
@@ -42,6 +44,7 @@ export function registerTimeTools(server: McpServer): void {
       runTool('projo_time_entries', extra, async (caller) => {
         const r = await timeEntries(projoSessions, caller.email, from, to ?? from);
         const next: string[] = [];
+        if (r.degraded) next.push(DEGRADED_HINT);
         if (r.source === 'monatsansicht') next.push('Für Buchungs-IDs (Ändern/Löschen) projo_time_entries mit einem Zeitraum bis 10 Tage aufrufen.');
         if (r.days.length === 0) next.push(`projo_time_options with {"query": "<Stichwort>"} – passende Leistung finden, dann projo_time_entry_create`);
         return respond({ ...r }, next.length ? next : undefined);
@@ -60,7 +63,10 @@ export function registerTimeTools(server: McpServer): void {
       annotations: READ,
     },
     async ({ from, to }, extra) =>
-      runTool('projo_time_summary', extra, async (caller) => respond({ ...(await hoursSummary(projoSessions, caller.email, from, to)) })),
+      runTool('projo_time_summary', extra, async (caller) => {
+        const r = await hoursSummary(projoSessions, caller.email, from, to);
+        return respond({ ...r }, r.degraded ? [DEGRADED_HINT] : undefined);
+      }),
   );
 
   server.registerTool(

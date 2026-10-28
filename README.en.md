@@ -40,6 +40,7 @@ User's browser ─────────────────────�
 |---|---|---|
 | M0 Foundation | `projo_status`, `projo_read_page` (generic read-only page reader), connect page with projo password or Microsoft (incl. Authenticator approval) | done |
 | M1 Time tracking | `projo_time_entries`, `projo_time_summary`, `projo_time_options`, `projo_time_entry_create` / `_update` / `_delete` | done (tested against real projo) |
+| Optional: LLM fallback | If a parser fails on a changed projo page, an LLM (e.g. via Requesty, EU) extracts the same data against a fixed schema – result flagged `degraded`, drift snapshot + repair suggestion in `DATA_DIR/drift` (7 days). Never used for writes. | done |
 | M2 Absences | vacation balance, absence list, absence requests, team view | planned |
 | M3 Project controlling (read) | projects, contracts, performance / invoicing / payment status, open invoices | planned |
 | M4 Project controlling (write) | invoice drafts, positions, price overviews (drafts + explicit confirmation) | planned |
