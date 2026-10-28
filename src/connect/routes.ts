@@ -6,9 +6,11 @@ import { getSession, setSession } from '../authn/session.js';
 import { users } from '../oauth/store.js';
 import { isProjoError } from '../projo/errors.js';
 import { audit, entraJobs, projoSessions } from '../projo/runtime.js';
+import { renderErrorPage } from '../util/html.js';
 import { log } from '../util/log.js';
+import { continueFlow, getFlow } from './flow.js';
 import { connectIdpCallback, connectIdpStart } from './idp.js';
-import { connectPage, connectSignInPage } from './views.js';
+import { ACTIVE_MS_STATES, connectPage, connectSignInPage } from './views.js';
 
 /**
  * Verbindungsseite /connect: Hier (und nur hier) gibt eine Person ihre projo-Zugangsdaten ein.
@@ -46,8 +48,23 @@ function noStore(res: Response): Response {
   return res.set('Cache-Control', 'no-store').set('X-Frame-Options', 'DENY').set('Referrer-Policy', 'no-referrer');
 }
 
+/** flow-Kennung aus Query oder Formular (Connector-Ablauf „Schritt 2 von 2“). */
+function flowIdOf(req: Request): string | undefined {
+  const fromBody = (req.body as Record<string, unknown> | undefined)?.flow;
+  const v = typeof fromBody === 'string' ? fromBody : req.query.flow;
+  return typeof v === 'string' && v ? v : undefined;
+}
+
+/** Ziel nach einer Aktion: im Connector-Ablauf zurück auf dessen Seite, sonst /connect (+ Meldung). */
+function nextUrl(req: Request, email: string, msg?: string): string {
+  const flow = getFlow(flowIdOf(req), email);
+  if (flow) return `/connect?flow=${encodeURIComponent(flow.id)}`;
+  return msg ? `/connect?msg=${msg}` : '/connect';
+}
+
 function renderConnect(req: Request, res: Response, email: string, extra: { error?: string; status?: number } = {}): void {
   const msg = typeof req.query.msg === 'string' ? req.query.msg : undefined;
+  const flow = getFlow(flowIdOf(req), email);
   noStore(res)
     .status(extra.status ?? 200)
     .send(
@@ -60,6 +77,7 @@ function renderConnect(req: Request, res: Response, email: string, extra: { erro
         allowStorePassword: config.PROJO_STORE_PASSWORDS,
         microsoftAvailable: config.PROJO_MS_CONNECT,
         msJob: entraJobs.status(email),
+        ...(flow ? { flow } : {}),
       }),
     );
 }
@@ -75,7 +93,24 @@ function renderSignIn(res: Response, error?: string, status = 200): void {
 connectRouter.get('/connect', (req, res) => {
   const session = getSession(req);
   if (!session) return renderSignIn(res);
+  // Connector-Ablauf: ist projo (inzwischen) verbunden und keine Anmeldung mehr aktiv → zurück zum Client
+  const flow = getFlow(flowIdOf(req), session.email);
+  const job = entraJobs.status(session.email);
+  if (flow && projoSessions.status(session.email).connected && !(job && ACTIVE_MS_STATES.has(job.state))) {
+    res.redirect(303, `/connect/flow/${encodeURIComponent(flow.id)}/continue`);
+    return;
+  }
   renderConnect(req, res, session.email);
+});
+
+/** Connector-Ablauf abschließen (nach dem Verbinden oder per „Überspringen“): Code ausstellen, zurück zum Client. */
+connectRouter.get('/connect/flow/:id/continue', (req, res) => {
+  const session = getSession(req);
+  if (!session) return renderSignIn(res);
+  noStore(res);
+  if (!continueFlow(res, String(req.params.id), session.email)) {
+    renderErrorPage(res, 400, 'Ablauf abgelaufen', 'Die Anmeldung beim KI-Assistenten ist abgelaufen – bitte den Connector dort erneut verbinden.');
+  }
 });
 
 connectRouter.post('/connect/password', formParser, async (req, res) => {
@@ -91,7 +126,7 @@ connectRouter.post('/connect/password', formParser, async (req, res) => {
   try {
     await projoSessions.connectWithPassword(session.email, projoEmail, password, body.store_password === '1');
     audit.write({ user: session.email, action: 'connect.password', result: 'ok', details: { projoEmail, storePassword: body.store_password === '1' } });
-    res.redirect(303, '/connect?msg=connected');
+    res.redirect(303, nextUrl(req, session.email, 'connected'));
   } catch (err) {
     const message = isProjoError(err) ? err.message : 'Unerwarteter Fehler beim Verbinden.';
     audit.write({ user: session.email, action: 'connect.password', result: 'error', details: { projoEmail }, error: isProjoError(err) ? err.code : 'error' });
@@ -125,7 +160,8 @@ connectRouter.post('/connect/microsoft', formParser, (req, res) => {
   if (rateLimited(session.email)) return renderConnect(req, res, session.email, { error: 'Zu viele Versuche – bitte in einigen Minuten erneut probieren.', status: 429 });
   entraJobs.start(session.email, msEmail, msPassword);
   // eindeutige URL → der Browser lädt garantiert frisch (kein Wiederverwenden der Formularseite)
-  res.redirect(303, `/connect?ms=${Date.now().toString(36)}`);
+  const flow = getFlow(flowIdOf(req), session.email);
+  res.redirect(303, `/connect?ms=${Date.now().toString(36)}${flow ? `&flow=${encodeURIComponent(flow.id)}` : ''}`);
 });
 
 /** Status der laufenden Microsoft-Anmeldung (für die Anzeige auf der Verbindungsseite, wird gepollt). */
@@ -156,7 +192,7 @@ connectRouter.post('/connect/microsoft/cancel', formParser, (req, res) => {
   const session = getSession(req);
   if (!session) return renderSignIn(res, 'Bitte zuerst anmelden.', 401);
   if (csrfOk(session.email, (req.body as Record<string, unknown>).csrf)) entraJobs.cancel(session.email);
-  res.redirect(303, '/connect');
+  res.redirect(303, nextUrl(req, session.email));
 });
 
 // Anmeldung an diesem Server direkt hier (falls kein mcp_session-Cookie vorhanden)

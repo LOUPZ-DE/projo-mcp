@@ -3,7 +3,10 @@ import type { EntraJobStatus } from '../projo/auth/entra.js';
 import type { ConnectionStatus } from '../projo/session.js';
 import { escapeHtml, widePage } from '../util/html.js';
 
-/** Server-gerenderte Seiten der Verbindungsseite (/connect) – bewusst ohne Client-Framework. */
+/**
+ * Server-gerenderte Seiten der Verbindungsseite (/connect) – bewusst ohne Client-Framework.
+ * Grundsatz: eine Hauptaktion, alles Optionale eingeklappt (<details>), funktioniert auch ohne JavaScript.
+ */
 
 const EXTRA_CSS = `
 <style>
@@ -12,13 +15,18 @@ const EXTRA_CSS = `
   .status.warn { background: #78350f; color: #fde68a; }
   .status.none { background: #334155; color: #e2e8f0; }
   .notice { background: #0c4a6e; color: #bae6fd; border-radius: 8px; padding: .5rem .75rem; font-size: .85rem; margin-top: 1rem; }
-  h2 { font-size: 1rem; margin: 1.75rem 0 .25rem; }
+  .step { display: inline-block; font-size: .75rem; color: #7dd3fc; text-transform: uppercase; letter-spacing: .06em; margin-bottom: .25rem; }
+  .hint { font-size: .8rem; color: #94a3b8; margin-top: .6rem; line-height: 1.4; }
+  details { margin-top: 1rem; }
+  summary { cursor: pointer; color: #7dd3fc; font-size: .85rem; }
+  details[open] > summary { margin-bottom: .25rem; }
   .check { display: flex; gap: .5rem; align-items: flex-start; margin-top: .9rem; font-size: .8rem; color: #94a3b8; }
   .check input { width: auto; margin-top: .15rem; }
   .secondary { background: #334155; color: #e2e8f0; }
   .secondary:hover { background: #475569; }
-  .danger { background: #7f1d1d; color: #fecaca; }
-  .danger:hover { background: #991b1b; }
+  .linklike { background: none; color: #94a3b8; font-weight: 400; font-size: .85rem; text-decoration: underline; padding: .25rem; margin-top: .75rem; }
+  .linklike:hover { background: none; color: #fecaca; }
+  .skip { display: block; text-align: center; margin-top: 1.25rem; font-size: .85rem; color: #94a3b8; }
   .mfa-number { font-size: 2.5rem; font-weight: 700; text-align: center; letter-spacing: .1em; margin: .5rem 0; }
 </style>`;
 
@@ -36,18 +44,6 @@ function fmt(iso?: string): string {
   return new Date(iso).toLocaleString('de-DE', { timeZone: 'Europe/Berlin', dateStyle: 'medium', timeStyle: 'short' });
 }
 
-function statusBox(s: ConnectionStatus): string {
-  if (!s.method) return `<div class="status none">Noch kein projo-Konto verbunden.</div>`;
-  const who = escapeHtml(s.projoUserName ? `${s.projoUserName} (${s.projoEmail})` : (s.projoEmail ?? ''));
-  const method = s.method === 'entra' ? 'Microsoft' : 'projo-Passwort';
-  if (s.expired) {
-    return `<div class="status warn">Die projo-Sitzung für <b>${who}</b> ist abgelaufen – bitte unten neu verbinden.</div>`;
-  }
-  return `<div class="status ok">Verbunden mit projo als <b>${who}</b><br>
-    Anmeldung: ${method} · verbunden seit ${fmt(s.connectedAt)} · zuletzt geprüft ${fmt(s.lastValidatedAt)}
-    ${s.method === 'password' ? `<br>Passwort gespeichert: ${s.passwordStored ? 'ja (stille Neuanmeldung aktiv)' : 'nein'}` : ''}</div>`;
-}
-
 export interface ConnectPageOpts {
   email: string;
   status: ConnectionStatus;
@@ -58,30 +54,41 @@ export interface ConnectPageOpts {
   microsoftAvailable: boolean;
   /** laufende oder gerade beendete Microsoft-Anmeldung */
   msJob?: EntraJobStatus;
+  /** Verbinden im Connector-Ablauf („Schritt 2 von 2“, danach zurück zum Client) */
+  flow?: { id: string; clientName?: string };
 }
 
-const ACTIVE_MS_STATES = new Set(['starting', 'microsoft', 'awaiting_approval', 'awaiting_code', 'finishing']);
+export const ACTIVE_MS_STATES = new Set(['starting', 'microsoft', 'awaiting_approval', 'awaiting_code', 'finishing']);
+
+/**
+ * Absenden ohne Verlaufseintrag nur außerhalb des Connector-Ablaufs: dort endet die Weiterleitungskette beim
+ * Client (fremde Domain) – fetch scheitert an CORS und würde das Formular doppelt absenden.
+ */
+const inplace = (o: { flow?: unknown }) => (o.flow ? '' : ' data-inplace');
+
+const hidden = (name: string, value: string | undefined) => (value ? `<input type="hidden" name="${name}" value="${escapeHtml(value)}">` : '');
 
 /**
  * Live-Status der Microsoft-Anmeldung. Funktioniert auch ohne JavaScript: Solange die Anmeldung läuft,
  * lädt sich die Seite per <meta refresh> neu (Zahl serverseitig gerendert). Das Script beschleunigt nur,
- * löscht nie Inhalte und lädt bei Abschluss die Seite neu.
+ * löscht nie Inhalte und lädt bei Abschluss neu (im Connector-Ablauf geht es dann zurück zum Client).
  */
-function msJobBox(job: EntraJobStatus, csrf: string): string {
+function msJobBox(job: EntraJobStatus, csrf: string, flowId?: string): string {
+  const back = flowId ? `/connect?flow=${encodeURIComponent(flowId)}` : '/connect';
   return `
-    <div id="ms-job" class="status none" data-csrf="${escapeHtml(csrf)}" data-state="${escapeHtml(job.state)}">
+    <div id="ms-job" class="status none" data-state="${escapeHtml(job.state)}" data-back="${escapeHtml(back)}">
       <div id="ms-msg">${escapeHtml(job.message)}</div>
       <div id="ms-number" class="mfa-number"${job.number ? '' : ' hidden'}>${escapeHtml(job.number ?? '')}</div>
       <form id="ms-code" method="post" action="/connect/mfa"${job.state === 'awaiting_code' ? '' : ' hidden'}>
-        <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
+        ${hidden('csrf', csrf)}
         <label for="ms_code">Bestätigungscode</label>
         <input id="ms_code" name="code" inputmode="numeric" autocomplete="one-time-code" required>
         <button type="submit">Code senden</button>
       </form>
-      <div class="meta">Die Anzeige aktualisiert sich automatisch – falls sich nichts tut, die Seite neu laden.</div>
-      <form id="ms-cancel" method="post" action="/connect/microsoft/cancel" data-inplace>
-        <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
-        <button type="submit" class="secondary">Abbrechen</button>
+      <div class="hint">Aktualisiert sich automatisch – falls sich nichts tut, die Seite neu laden.</div>
+      <form id="ms-cancel" method="post" action="/connect/microsoft/cancel"${flowId ? '' : ' data-inplace'}>
+        ${hidden('csrf', csrf)}${hidden('flow', flowId)}
+        <button type="submit" class="linklike">Abbrechen</button>
       </form>
     </div>
     <script>
@@ -91,13 +98,14 @@ function msJobBox(job: EntraJobStatus, csrf: string): string {
       const msg = document.getElementById('ms-msg');
       const num = document.getElementById('ms-number');
       const codeForm = document.getElementById('ms-code');
+      const back = box.dataset.back;
       let state = box.dataset.state;
       let timer;
       const apply = (s) => {
         if (!s || !s.state || s.state === 'none') return;
         if (s.state === 'done' || s.state === 'failed') {
           clearInterval(timer);
-          location.replace(s.state === 'done' ? '/connect?msg=connected' : '/connect');
+          location.replace(s.state === 'done' && back === '/connect' ? '/connect?msg=connected' : back);
           return;
         }
         if (s.message) msg.textContent = s.message;
@@ -138,7 +146,7 @@ const PAGE_SCRIPT = `<script>
         const res = await fetch(form.action, { method: 'POST', body: new URLSearchParams(new FormData(form)), credentials: 'same-origin' });
         if (res.redirected) { location.replace(res.url); return; }
         const html = await res.text();
-        history.replaceState(null, '', '/connect');
+        history.replaceState(null, '', location.pathname + location.search);
         document.open(); document.write(html); document.close();
       } catch (err) {
         form.submit();
@@ -155,56 +163,98 @@ const PAGE_SCRIPT = `<script>
 })();
 </script>`;
 
-export function connectPage(o: ConnectPageOpts): string {
-  const msg = o.msg ? MESSAGES[o.msg] : undefined;
-  const defaultProjoEmail = escapeHtml(o.status.projoEmail ?? o.email);
-  const body = `
-    <h1>projo verbinden</h1>
-    <div class="sub">Angemeldet als ${escapeHtml(o.email)} · ${escapeHtml(config.SERVER_NAME)}</div>
-    ${msg ? `<div class="${msg.cls === 'ok' ? 'status ok' : 'notice'}"${o.msg === 'connected' ? ' id="close-hint"' : ''}>${escapeHtml(msg.text)}</div>` : ''}
-    ${o.error ? `<div class="error">${escapeHtml(o.error)}</div>` : ''}
-    ${statusBox(o.status)}
+/** Hauptaktion „Mit Microsoft verbinden“: nur das Konto-Feld, Passwort eingeklappt. */
+function microsoftForm(o: ConnectPageOpts, email: string, cta: string): string {
+  return `
+    <form method="post" action="/connect/microsoft" accept-charset="utf-8" autocomplete="off"${inplace(o)}>
+      ${hidden('csrf', o.csrf)}${hidden('flow', o.flow?.id)}
+      <label for="ms_email">Microsoft-Konto</label>
+      <input id="ms_email" name="ms_email" type="email" required value="${escapeHtml(email)}" autocomplete="username">
+      <details>
+        <summary>Microsoft fragt nach einem Passwort?</summary>
+        <label for="ms_password">Microsoft-Passwort (wird nicht gespeichert)</label>
+        <input id="ms_password" name="ms_password" type="password" autocomplete="current-password">
+      </details>
+      <button type="submit">${cta}</button>
+    </form>
+    <div class="hint">Anschließend erscheint hier eine Zahl, die du in der Microsoft-Authenticator-App bestätigst.</div>`;
+}
 
-    <h2>Mit projo-E-Mail und Passwort</h2>
-    <form method="post" action="/connect/password" accept-charset="utf-8" autocomplete="off" data-inplace>
-      <input type="hidden" name="csrf" value="${escapeHtml(o.csrf)}">
+/** projo-eigenes Login (E-Mail + Passwort). */
+function passwordForm(o: ConnectPageOpts, email: string, cta: string): string {
+  return `
+    <form method="post" action="/connect/password" accept-charset="utf-8" autocomplete="off"${inplace(o)}>
+      ${hidden('csrf', o.csrf)}${hidden('flow', o.flow?.id)}
       <label for="projo_email">projo-E-Mail</label>
-      <input id="projo_email" name="projo_email" type="email" required value="${defaultProjoEmail}" autocomplete="username">
+      <input id="projo_email" name="projo_email" type="email" required value="${escapeHtml(email)}" autocomplete="username">
       <label for="projo_password">projo-Passwort</label>
       <input id="projo_password" name="projo_password" type="password" required autocomplete="current-password">
       ${o.allowStorePassword ? `<label class="check"><input type="checkbox" name="store_password" value="1">
-        <span>Passwort verschlüsselt speichern, damit sich der Server bei abgelaufener Sitzung selbst neu anmelden kann.</span></label>` : ''}
-      <button type="submit">Verbinden</button>
-    </form>
+        <span>Passwort verschlüsselt speichern – dann meldet sich der Server bei abgelaufener Sitzung selbst neu an.</span></label>` : ''}
+      <button type="submit">${cta}</button>
+    </form>`;
+}
 
-    ${o.msJob && ACTIVE_MS_STATES.has(o.msJob.state) ? `<h2>Anmeldung mit Microsoft</h2>${msJobBox(o.msJob, o.csrf)}` : ''}
-    ${o.msJob?.state === 'failed' ? `<div class="error">Microsoft-Anmeldung fehlgeschlagen: ${escapeHtml(o.msJob.message)}</div>` : ''}
+/** Verbindungsformulare: eine Hauptmethode sichtbar, die andere eingeklappt. */
+function connectForms(o: ConnectPageOpts): string {
+  const email = o.status.projoEmail ?? o.email;
+  const preferPassword = o.status.method === 'password' || !o.microsoftAvailable;
+  if (preferPassword) {
+    return `${passwordForm(o, email, 'Mit projo verbinden')}
+      ${o.microsoftAvailable ? `<details><summary>Stattdessen „Mit Microsoft anmelden“ verwenden</summary>${microsoftForm(o, email, 'Mit Microsoft verbinden')}</details>` : ''}`;
+  }
+  return `${microsoftForm(o, email, 'Mit Microsoft verbinden')}
+    <details><summary>Stattdessen mit projo-E-Mail und Passwort verbinden</summary>${passwordForm(o, email, 'Mit projo verbinden')}</details>`;
+}
 
-    ${o.microsoftAvailable && !(o.msJob && ACTIVE_MS_STATES.has(o.msJob.state)) ? `
-    <h2>Mit Microsoft („Mit Microsoft anmelden“ in projo)</h2>
-    <form method="post" action="/connect/microsoft" accept-charset="utf-8" autocomplete="off" data-inplace>
-      <input type="hidden" name="csrf" value="${escapeHtml(o.csrf)}">
-      <label for="ms_email">Microsoft-Konto</label>
-      <input id="ms_email" name="ms_email" type="email" required value="${defaultProjoEmail}" autocomplete="username">
-      <label for="ms_password">Microsoft-Passwort (nur nötig, wenn Microsoft danach fragt – bei Anmeldung per Authenticator-App leer lassen)</label>
-      <input id="ms_password" name="ms_password" type="password" autocomplete="current-password">
-      <button type="submit" class="secondary">Mit Microsoft verbinden</button>
-    </form>
-    <div class="meta">Der Server meldet sich dabei in einem eigenen Browser bei Microsoft an. Die Zahl für die
-      Authenticator-App bzw. ein Code-Feld erscheint hier. Ein Microsoft-Passwort wird nie gespeichert.</div>` : ''}
+function connectedBox(s: ConnectionStatus): string {
+  const who = escapeHtml(s.projoUserName ? `${s.projoUserName} (${s.projoEmail})` : (s.projoEmail ?? ''));
+  const method = s.method === 'entra' ? 'Microsoft' : 'projo-Passwort';
+  return `<div class="status ok">Verbunden mit projo als <b>${who}</b><br>
+    <span style="font-size:.8rem">Anmeldung: ${method} · seit ${fmt(s.connectedAt)} · zuletzt geprüft ${fmt(s.lastValidatedAt)}${
+      s.method === 'password' && s.passwordStored ? ' · stille Neuanmeldung aktiv' : ''
+    }</span></div>`;
+}
 
-    ${o.status.method ? `
-    <h2>Verbindung trennen</h2>
-    <form method="post" action="/connect/disconnect" data-inplace>
-      <input type="hidden" name="csrf" value="${escapeHtml(o.csrf)}">
-      <button type="submit" class="danger">projo-Verbindung trennen</button>
-    </form>` : ''}
+export function connectPage(o: ConnectPageOpts): string {
+  const msg = o.msg ? MESSAGES[o.msg] : undefined;
+  const active = Boolean(o.msJob && ACTIVE_MS_STATES.has(o.msJob.state));
+  const failed = o.msJob?.state === 'failed' ? o.msJob.message : undefined;
+  const clientName = o.flow?.clientName ?? 'deinem KI-Assistenten';
 
-    <div class="meta">Zugangsdaten werden nur auf dieser Seite eingegeben – nie im Chat. Gespeichert wird verschlüsselt
-      die projo-Sitzung (Cookies), ein Passwort nur auf ausdrücklichen Wunsch.</div>
+  const header = o.flow
+    ? `<span class="step">Schritt 2 von 2</span>
+       <h1>projo verbinden</h1>
+       <div class="sub">Angemeldet als ${escapeHtml(o.email)} – noch dein projo-Konto verbinden, danach geht es automatisch zurück zu ${escapeHtml(clientName)}.</div>`
+    : `<h1>projo verbinden</h1>
+       <div class="sub">Angemeldet als ${escapeHtml(o.email)}</div>`;
+
+  let main: string;
+  if (active) {
+    main = msJobBox(o.msJob!, o.csrf, o.flow?.id);
+  } else if (o.status.connected && !o.flow) {
+    main = `${connectedBox(o.status)}
+      <details><summary>Neu verbinden oder anderes Konto verwenden</summary>${connectForms(o)}</details>
+      <form method="post" action="/connect/disconnect" data-inplace>
+        ${hidden('csrf', o.csrf)}
+        <button type="submit" class="linklike">projo-Verbindung trennen</button>
+      </form>`;
+  } else {
+    main = `${o.status.expired ? '<div class="status warn">Die projo-Sitzung ist abgelaufen – bitte neu verbinden.</div>' : ''}
+      ${connectForms(o)}`;
+  }
+
+  const body = `
+    ${header}
+    ${msg && !o.flow ? `<div class="${msg.cls === 'ok' ? 'status ok' : 'notice'}"${o.msg === 'connected' ? ' id="close-hint"' : ''}>${escapeHtml(msg.text)}</div>` : ''}
+    ${o.error ? `<div class="error">${escapeHtml(o.error)}</div>` : ''}
+    ${failed && !active ? `<div class="error">Microsoft-Anmeldung fehlgeschlagen: ${escapeHtml(failed)}</div>` : ''}
+    ${main}
+    ${o.flow && !active ? `<a class="skip" href="/connect/flow/${encodeURIComponent(o.flow.id)}/continue">Überspringen – projo später verbinden</a>` : ''}
+    <div class="meta">Zugangsdaten werden nur hier eingegeben – nie im Chat. Gespeichert wird verschlüsselt nur die
+      projo-Sitzung, ein Passwort nur auf ausdrücklichen Wunsch.</div>
     ${PAGE_SCRIPT}`;
   // Ohne JavaScript: Seite neu laden, solange die Microsoft-Anmeldung läuft (außer während der Code-Eingabe)
-  const active = Boolean(o.msJob && ACTIVE_MS_STATES.has(o.msJob.state));
   const refresh = active && o.msJob?.state !== 'awaiting_code' ? '<meta http-equiv="refresh" content="3">' : '';
   return render('projo verbinden', body, refresh);
 }

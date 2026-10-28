@@ -3,7 +3,7 @@ import { jwtVerify, type JWTPayload } from 'jose';
 import { config } from '../../config.js';
 import { randomToken, s256Challenge } from '../../oauth/pkce.js';
 import { getIdpTxn, getPendingAuth, idpTxns, pendingAuths } from '../../oauth/store.js';
-import { completeAuthorization } from '../../oauth/complete.js';
+import { finishAuthorization } from '../../connect/flow.js';
 import { renderErrorPage } from '../../util/html.js';
 import { log } from '../../util/log.js';
 import { setSession } from '../session.js';
@@ -168,5 +168,5 @@ export async function idpCallbackHandler(req: Request, res: Response): Promise<v
   pendingAuths.delete(idpTxn.txn);
   const authnIdentity = { email: identity.email, name: identity.name, idp: provider.key };
   setSession(res, authnIdentity);
-  completeAuthorization(res, pending, authnIdentity);
+  finishAuthorization(res, pending, authnIdentity); // ggf. erst projo verbinden (Schritt 2), dann zum Client
 }

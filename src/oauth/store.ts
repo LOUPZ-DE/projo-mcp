@@ -181,7 +181,7 @@ function saveNow(): void {
   try {
     mkdirSync(dirname(config.STATE_FILE), { recursive: true });
     const tmp = `${config.STATE_FILE}.tmp`;
-    writeFileSync(tmp, JSON.stringify(data), 'utf8');
+    writeFileSync(tmp, JSON.stringify(data), { encoding: 'utf8', mode: 0o600 }); // enthält Refresh-Tokens
     renameSync(tmp, config.STATE_FILE); // atomar
     log('debug', 'Statefile geschrieben', { stateFile: config.STATE_FILE, clients: clients.size, refreshTokens: refreshTokens.size });
   } catch (err) {

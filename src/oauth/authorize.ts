@@ -2,7 +2,7 @@ import type { Request, Response } from 'express';
 import { config } from '../config.js';
 import { randomToken } from './pkce.js';
 import { getClient, getPendingAuth, pendingAuths, users, type PendingAuth } from './store.js';
-import { completeAuthorization } from './complete.js';
+import { finishAuthorization } from '../connect/flow.js';
 import { getSession, setSession } from '../authn/session.js';
 import { renderLoginPage } from '../authn/loginPage.js';
 import { renderErrorPage } from '../util/html.js';
@@ -95,7 +95,7 @@ export function authorizeGetHandler(req: Request, res: Response): void {
   const session = getSession(req);
   if (session) {
     pendingAuths.delete(txn);
-    completeAuthorization(res, pending, session);
+    finishAuthorization(res, pending, session); // ggf. erst projo verbinden (Schritt 2), dann zum Client
     return;
   }
 
@@ -132,5 +132,5 @@ export function authorizePostHandler(req: Request, res: Response): void {
   pendingAuths.delete(txn!);
   const identity = { email: user.email, name: user.name, idp: 'local' };
   setSession(res, identity);
-  completeAuthorization(res, pending, identity);
+  finishAuthorization(res, pending, identity);
 }
