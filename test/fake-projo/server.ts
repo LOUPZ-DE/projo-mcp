@@ -23,8 +23,11 @@ export interface FakeProjo {
   accounts: Map<string, string>;
   requests: { method: string; path: string; body?: Record<string, string> }[];
   bookings: Map<string, FakeBooking>;
-  /** rejectCsrf: Writes immer wie bei ungültigem CSRF-Token beantworten */
-  state: { rejectCsrf: boolean };
+  /**
+   * rejectCsrf: Writes immer wie bei ungültigem CSRF-Token beantworten; treeBroken: Leistungsbaum mit fremdem Format;
+   * lockedDays: Tage im gesperrten Zeitraum ohne Buchung (kein Button „Zeitbuchung“)
+   */
+  state: { rejectCsrf: boolean; treeBroken: boolean; lockedDays: Set<string> };
   /** aktuell gefilterter Vertrag (treatyId) */
   activeTreaty(): string | undefined;
   seedBooking(b: Omit<FakeBooking, 'id' | 'description'> & { description?: string }): string;
@@ -118,13 +121,37 @@ export async function startFakeProjo(): Promise<FakeProjo> {
     '700001': { code: '1000-Projekt-01', title: 'Neubau Musterschule' },
     '700002': { code: '2000-Intern-08', title: 'Interne Leistungen' },
   };
-  const tasks: Record<string, { treaty: string; name: string }> = {
-    '6000001': { treaty: '700002', name: 'Hardware' },
-    '6000002': { treaty: '700002', name: 'IT-Support' },
-    '6000003': { treaty: '700002', name: 'Eigenentwicklungen - Werkzeug A' },
-    '6100001': { treaty: '700001', name: 'Leistungsstufe 2 - Kostenmanagement - Kostensteuerung zur Einhaltung der Kostenziele - Standort Nord' },
-    '6100002': { treaty: '700001', name: 'Leistungsstufe 2 - Kostenmanagement - Kostensteuerung zur Einhaltung der Kostenziele - Standort Süd' },
+  // Leistungsbaum je Vertrag („alle Leistungen“); Zeilen ohne taskId sind Gruppen bzw. nicht buchbar
+  const treeRows: Record<string, { number: string; name: string; taskId?: string; status?: string }[]> = {
+    '700001': [
+      { number: '2', name: 'Leistungsstufe 2' },
+      { number: '2.1', name: 'Kostenmanagement' },
+      { number: '2.1.1', name: 'Kostensteuerung zur Einhaltung der Kostenziele' },
+      { number: '2.1.1.1', name: 'Standort Nord', taskId: '6100001' },
+      { number: '2.1.1.2', name: 'Standort Süd', taskId: '6100002' },
+      { number: '2.1.2', name: 'Kostenkontrolle' },
+      { number: '2.1.2.1', name: 'Standort Nord', taskId: '6100004' },
+      { number: '2.1.2.2', name: 'Standort Süd', taskId: '6100005', status: 'nicht abrechenbar' },
+      { number: '2.1.2.3', name: 'Standort West', status: 'fertig' },
+      { number: '2.1.3', name: 'Basisprojekt', taskId: '6100003' },
+    ],
+    '700002': [
+      { number: '1', name: 'Hardware', taskId: '6000001' },
+      { number: '2', name: 'IT-Support', taskId: '6000002' },
+      { number: '3', name: 'Eigenentwicklungen' },
+      { number: '3.1', name: 'Werkzeug A', taskId: '6000003' },
+    ],
   };
+  // buchbare Leistungen wie im Leistungs-Select: voller Pfad mit " - "
+  const tasks: Record<string, { treaty: string; name: string }> = {};
+  for (const [treaty, rows] of Object.entries(treeRows)) {
+    for (const r of rows) {
+      if (!r.taskId) continue;
+      const path = rows.filter((p) => r.number.startsWith(`${p.number}.`)).map((p) => p.name);
+      tasks[r.taskId] = { treaty, name: [...path, r.name].join(' - ') };
+    }
+  }
+  const leafOf = (taskId: string) => `5${taskId.slice(1)}`;
   const bookings = new Map<string, FakeBooking>();
   let nextId = 900000100;
   let activeTreaty: string | undefined = '700002';
@@ -166,7 +193,7 @@ export async function startFakeProjo(): Promise<FakeProjo> {
   const showJs = (date: string) => `$("#show").html("${escapeJs(showHtml(date))}");`;
   const taskSelect = (ids: string[]) =>
     `<select name="time_tracking_booking[task_id]"><option value=""></option>${ids
-      .map((id) => `<option data-time-tracking-leaf-url="/time_tracking/leaves/5${id}" value="${id}">${esc(tasks[id]!.name)}</option>`)
+      .map((id) => `<option data-time-tracking-leaf-url="/time_tracking/leaves/${leafOf(id)}" value="${id}">${esc(tasks[id]!.name)}</option>`)
       .join('')}</select>`;
   /** projo behandelt Writes ohne gültiges CSRF-Header-Token als „nicht angemeldet“ (Sitzung bleibt gültig). */
   const csrfOk = (req: Request, res: Response) => {
@@ -176,10 +203,40 @@ export async function startFakeProjo(): Promise<FakeProjo> {
     }
     return true;
   };
-  const state = { rejectCsrf: false };
+  const state = { rejectCsrf: false, treeBroken: false, lockedDays: new Set<string>() };
 
   app.get('/app/dates/:date', requireAuth, (req, res) => {
-    res.send(dayPage(String(req.params.date)));
+    const date = String(req.params.date);
+    if (state.lockedDays.has(date)) {
+      res.send(fixture('day-locked.html').replaceAll('https://my.projo.berlin', url).replaceAll('2026-10-26', date));
+      return;
+    }
+    res.send(dayPage(date));
+  });
+
+  const treeHtml = (treaty: string) => {
+    const rows = treeRows[treaty]!;
+    const body = rows
+      .map((r) => {
+        const level = r.number.split('.').length;
+        const group = rows.some((x) => x.number.startsWith(`${r.number}.`));
+        const name = r.taskId
+          ? `<a data-remote="true" rel="nofollow" data-method="patch" href="${url}/app/structure_bookings/${leafOf(r.taskId)}/leaf_chosen?user_id=1001">${esc(r.name)}</a>`
+          : esc(r.name);
+        const cls = r.taskId ? '' : group ? 'big_leaf_group' : 'text-decoration-line-through hide';
+        return `<tr class=" ${cls} "><td>${r.number}</td><td style="padding-left:${(0.5 + (level - 1) * 1.2).toFixed(1)}em">${name}</td><td><span class="badge">${r.status ?? 'laufend'}</span></td></tr>`;
+      })
+      .join('');
+    const c = contractsById[treaty]!;
+    return `<div class="modal-body" id="treaty_tree">Projekt: <span class="label label-sub"><span title="${esc(c.title)}">${esc(c.code)}</span></span>
+      <table class="table table-bordered table-hover" id="treaty_tree"><thead><th></th><th>Leistung</th><th></th></thead><tbody>${body}</tbody></table></div>`;
+  };
+
+  // „alle Leistungen“: reiner GET (XHR), ändert den Vertragsfilter nicht
+  app.get('/app/structure_bookings/new', requireAuth, (req, res) => {
+    const treaty = String(req.query.treaty_id ?? '');
+    const html = state.treeBroken || !treeRows[treaty] ? '<div class="modal-body"><p>Wartungsarbeiten</p></div>' : treeHtml(treaty);
+    res.type('text/javascript').send(`$("#create_booking_form").hide();\n$("#new_one_off_booking").html("${escapeJs(html)}").show();`);
   });
 
   app.get('/app/bookings/new', requireAuth, (req, res) => {

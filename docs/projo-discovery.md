@@ -40,6 +40,11 @@ IDs sind Platzhalter (`<user_id>`, `<booking_id>`, `<task_id>`, `<leaf_id>`, `<t
   `<Vertragscode> - <Leistung>`, `title` = Leistungsname), Beschreibung im best_in_place-Span `description`.
 - Summenzeile ohne ID. Gesperrte Tage: Dauer als reiner Text, Hinweis „Kommentar kann noch geändert werden, obwohl
   Zeiten gesperrt sind!“ (nur die Beschreibung bleibt editierbar).
+- Kopf `#show > h2`: Vor/Heute/Zurück-Links und `a#datepicker` mit `current_date=<datum>` und
+  `current_url=…/app/dates/<datum>` – das einzige sichere Merkmal für **Tage ohne Buchung in einem gesperrten
+  Zeitraum** (Sperre je Person, z. B. „Arbeitszeit im Persönlichen Bereich bis zum <datum> gesperrt“ als `span[title]`
+  im Kopf): dort fehlen Button „Zeitbuchung“ und Tabelle, ggf. steht die Abwesenheitsart im Kopf. Bis 2026-11 hielt der
+  Parser solche Tage für eine geänderte Oberfläche (Drift → KI-Reserve, `degraded`).
 
 **Monatsansicht** `/app/months?date=`: Kopf mit „Sollstunden (bis heute Abend)“, „Sollstunden (ab morgen)“,
 „Gebuchte Stunden“, „Abwesenheiten“, „Differenz“, „AZ-Konto“; Tabelle `Tag | Gebuchte Stunden | AZ-Konto`,
@@ -65,9 +70,20 @@ Felder `bookings[<task_id>][<YYYY-MM-DD>]` mit Wert `"08:00 h"`; gesperrte Tage 
   `filter_treaty?user_id=` ohne ID. Verträge und Leistungen unterscheiden sich je Person und Büro.
 - Option: `value=<task_id>`, `data-time-tracking-leaf-url=/time_tracking/leaves/<leaf_id>`; „Pause“ hat `value=" "`.
 - **Alle** buchbaren Leistungen: `GET /app/bookings/<booking_id>/edit_task?date=&user_id=` (XHR) liefert ein select2 mit
-  allen Leistungen über alle Verträge (`<Vertragscode> - <Pfad>`, lange Namen in der Mitte mit „ ... “ gekürzt).
-- Baum je Vertrag: `GET /app/structure_bookings/new?treaty_id=<treaty_id>&user_id=` (nur XHR) → Tabelle
-  `#treaty_tree` mit Nummer, Leistung, Status („laufend“) und `PATCH /app/structure_bookings/<leaf_id>/leaf_chosen`.
+  allen Leistungen über alle Verträge (`<Vertragscode> - <voller Pfad ab Ebene 1>`, lange Namen in der Mitte mit „ ... “
+  gekürzt – in großen HOAI-Verträgen rund 90 % der Einträge, anders sortiert als der Baum). Gleich endende Pfade sind
+  dort nicht unterscheidbar (z. B. derselbe Standort unter verschiedenen Tätigkeiten); Optionen ohne `leaf_id`.
+- **Leistungsbaum** je Vertrag („alle Leistungen“): `GET /app/structure_bookings/new?treaty_id=<treaty_id>&user_id=`
+  (XHR) – funktioniert für **jeden** Vertrag der Person und ändert den Vertragsfilter nicht (nur lesend, geprüft am
+  2026-11-09). Tabelle `table#treaty_tree`, je Zeile: Gliederungsnummer (`2.1.1.1.7`, Ebene = Anzahl der Teile),
+  Name (Einrückung `padding-left` 0.5em + 1.2em je Ebene), Status-Badge (`laufend`, `nicht abrechenbar`, `fertig`,
+  `auf Abruf`). Buchbare Leistungen tragen den Link `PATCH /app/structure_bookings/<leaf_id>/leaf_chosen` – dieselbe
+  `leaf_id` wie im Leistungs-Select. Gruppen: `tr.big_leaf_group` ohne Link; nicht buchbar:
+  `tr.text-decoration-line-through.hide` (`title="Leistung ist nicht buchbar"`). **Keine task_ids** im Baum.
+- `projo_time_options` sucht deshalb im Baum (volle Namen, Pfad, Nummer, Status) und holt die task_ids nur für
+  Verträge mit Treffern über den Vertragsfilter (Join über `leaf_id`); für den aktiven Vertrag reicht das Formular.
+  Ein GET-Parameter (`filtered_treaty_id`, `treaty_id`) an `bookings/new` wechselt die Liste nicht – der Filter-PATCH
+  bleibt der einzige Weg zu den task_ids anderer Verträge.
 - Beschreibungs-Vorschläge: `GET /work/tasks/<task_id>/descriptions?q=` (≥ 2 Zeichen).
 
 ## Zeiten – Schreiben (aus dem Mitschnitt)

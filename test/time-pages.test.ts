@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import * as cheerio from 'cheerio';
 import { describe, expect, it } from 'vitest';
-import { parseAllTasks, parseBookingForm, parseDayView, parseHoursAnalysis, parseMonthView, parseTaskOptions } from '../src/projo/pages/time.js';
+import { parseAllTasks, parseBookingForm, parseDayView, parseHoursAnalysis, parseMonthView, parseTaskOptions, parseTaskTree } from '../src/projo/pages/time.js';
 import { bookingMatchesTask, labelMatches } from '../src/projo/recipes/time.js';
 import { extractHtmlFromJs } from '../src/projo/util/dom.js';
 
@@ -25,6 +25,37 @@ describe('Tagesansicht', () => {
 
   it('meldet Drift bei fremder Seite', () => {
     expect(() => parseDayView(cheerio.load('<html><body><h1>Wartung</h1></body></html>'), '2026-03-10')).toThrowError(/unerwartetes Format/);
+  });
+
+  it('liest Tage ohne Buchung im gesperrten Zeitraum als leer (ohne Button „Zeitbuchung“, kein Drift)', () => {
+    expect(parseDayView(load('day-locked.html'), '2026-10-26')).toEqual({ date: '2026-10-26', bookings: [], totalHours: 0 });
+  });
+
+  it('meldet Drift, wenn der Tageskopf zu einem anderen Datum gehört', () => {
+    expect(() => parseDayView(load('day-locked.html'), '2026-10-27')).toThrowError(/unerwartetes Format/);
+  });
+
+  it('meldet Drift bei Dauer-Feldern ohne erkennbare Buchungszeile statt still „keine Buchungen“', () => {
+    const $ = load('day.html');
+    $('tr[id^="booking-"]').removeAttr('id');
+    expect(() => parseDayView($, '2026-03-10')).toThrowError(/Buchungszeilen/);
+  });
+});
+
+describe('Leistungsbaum („alle Leistungen“)', () => {
+  it('liest Nummer, Ebene, Name, Status und leafId; nicht buchbare Zeilen ohne leafId', () => {
+    const nodes = parseTaskTree(load('tree.html'));
+    expect(nodes).toHaveLength(10);
+    expect(nodes[0]).toEqual({ number: '2', level: 1, name: 'Leistungsstufe 2', status: 'laufend' });
+    expect(nodes[3]).toEqual({ number: '2.1.1.1', level: 4, name: 'Standort Nord', status: 'laufend', leafId: '5100001' });
+    expect(nodes[6]).toEqual({ number: '2.1.2.1', level: 4, name: 'Standort Nord', status: 'laufend', leafId: '5100004' });
+    expect(nodes[7]).toEqual({ number: '2.1.2.2', level: 4, name: 'Standort Süd', status: 'nicht abrechenbar', leafId: '5100005' });
+    expect(nodes[8]).toEqual({ number: '2.1.2.3', level: 4, name: 'Standort West', status: 'fertig' });
+    expect(nodes[9]).toEqual({ number: '2.1.3', level: 3, name: 'Basisprojekt', status: 'laufend', leafId: '5100003' });
+  });
+
+  it('meldet Drift ohne Baumtabelle', () => {
+    expect(() => parseTaskTree(cheerio.load('<div class="modal-body"><p>Wartung</p></div>'))).toThrowError(/unerwartetes Format/);
   });
 });
 

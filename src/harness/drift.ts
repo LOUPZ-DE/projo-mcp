@@ -28,9 +28,16 @@ export function recordDrift(key: string, html: string, reason: string): string |
   }
 }
 
-function pruneDrift(dir: string): void {
+/** Alte Schnappschüsse löschen – beim Schreiben und regelmäßig (sonst blieben sie liegen, wenn keine Drift mehr auftritt). */
+export function pruneDrift(dir = driftDir()): void {
   const cutoff = Date.now() - RETENTION_MS;
-  for (const name of readdirSync(dir)) {
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return; // noch kein Drift-Verzeichnis
+  }
+  for (const name of names) {
     const p = join(dir, name);
     try {
       if (statSync(p).mtimeMs < cutoff) rmSync(p);

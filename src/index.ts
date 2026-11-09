@@ -15,6 +15,7 @@ import { idpStartHandler, idpCallbackHandler } from './authn/idp/routes.js';
 import { mcpPostHandler, mcpMethodNotAllowedHandler } from './mcp/server.js';
 import { connectRouter } from './connect/routes.js';
 import { assertDataDirUsable, browserPool, entraJobs, projoSessions } from './projo/runtime.js';
+import { pruneDrift } from './harness/drift.js';
 
 assertDataDirUsable();
 loadState();
@@ -157,6 +158,10 @@ const server = app.listen(config.PORT, () => {
 
 // projo verlängert sein Sitzungs-Cookie bei jedem Request → regelmäßiger Keep-alive hält Verbindungen aktiv
 projoSessions.startKeepAlive(config.KEEPALIVE_HOURS);
+
+// Drift-Schnappschüsse nach 7 Tagen löschen – auch wenn keine neue Drift mehr auftritt
+pruneDrift();
+setInterval(() => pruneDrift(), 24 * 3_600_000).unref();
 
 // Graceful Shutdown: Docker Swarm/EasyPanel gibt 10 s – keine neuen Requests, Sitzungen schließen, raus.
 let shuttingDown = false;

@@ -1,0 +1,155 @@
+<!-- Antwort auf GET /app/structure_bookings/new?treaty_id=… (XHR), synthetisch nach dem echten Markup -->
+<div class="modal-body" id="treaty_tree">
+  <div class="float-right">
+    <button onclick="$('.hide').removeClass('hide');" class='btn btn-light ml-4' data-bs-toggle="  button" aria-pressed="false">weitere Leistungen</button>
+    <button onclick="$('#new_one_off_booking').hide();$('#treaty_tree').remove();$('#create_booking_form').show();false" class='btn btn-light'>
+      zurück
+    </button>
+  </div>
+
+  Projekt:
+<span class="label label-sub text-nowrap" style="font-size: 100%; border-color: #FFDB6B; background-color: #FFDB6B80;"><span title="Neubau Musterschule">1000-Projekt-01</span></span>
+<br>
+  <h3>Alle Leistungen - Leistung wählen:</h3>
+  <div class="table-responsive">
+    <table class="table table-bordered table-hover" id="treaty_tree">
+      <thead>
+        <th></th>
+        <th>Leistung</th>
+        <th></th>
+      </thead>
+      <tbody>
+          <tr class=" big_leaf_group ">
+            <td>
+              2
+            </td>
+            <td  style="padding-left:0.5em">
+                Leistungsstufe 2
+            </td>
+            <td>
+              <span class="badge bg-state-orange">laufend</span>
+            </td>
+          </tr>
+          <tr class=" big_leaf_group ">
+            <td>
+              2.1
+            </td>
+            <td  style="padding-left:1.7em">
+                Kostenmanagement
+            </td>
+            <td>
+              <span class="badge bg-state-orange">laufend</span>
+            </td>
+          </tr>
+          <tr class=" big_leaf_group ">
+            <td>
+              2.1.1
+            </td>
+            <td  style="padding-left:2.9em">
+                Kostensteuerung zur Einhaltung der Kostenziele
+            </td>
+            <td>
+              <span class="badge bg-state-orange">laufend</span>
+            </td>
+          </tr>
+          <tr class="
+             "
+             >
+            <td>
+              2.1.1.1
+            </td>
+            <td  style="padding-left:4.1em">
+                <a data-remote="true" rel="nofollow" data-method="patch" href="https://my.projo.berlin/app/structure_bookings/5100001/leaf_chosen?user_id=1001">
+                  Standort Nord
+</a>
+            </td>
+            <td>
+              <span class="badge bg-state-orange">laufend</span>
+            </td>
+          </tr>
+          <tr class="
+             "
+             >
+            <td>
+              2.1.1.2
+            </td>
+            <td  style="padding-left:4.1em">
+                <a data-remote="true" rel="nofollow" data-method="patch" href="https://my.projo.berlin/app/structure_bookings/5100002/leaf_chosen?user_id=1001">
+                  Standort Süd
+</a>
+            </td>
+            <td>
+              <span class="badge bg-state-orange">laufend</span>
+            </td>
+          </tr>
+          <tr class=" big_leaf_group ">
+            <td>
+              2.1.2
+            </td>
+            <td  style="padding-left:2.9em">
+                Kostenkontrolle
+            </td>
+            <td>
+              <span class="badge bg-state-orange">laufend</span>
+            </td>
+          </tr>
+          <tr class="
+             "
+             >
+            <td>
+              2.1.2.1
+            </td>
+            <td  style="padding-left:4.1em">
+                <a data-remote="true" rel="nofollow" data-method="patch" href="https://my.projo.berlin/app/structure_bookings/5100004/leaf_chosen?user_id=1001">
+                  Standort Nord
+</a>
+            </td>
+            <td>
+              <span class="badge bg-state-orange">laufend</span>
+            </td>
+          </tr>
+          <tr class="
+             "
+             >
+            <td>
+              2.1.2.2
+            </td>
+            <td  style="padding-left:4.1em">
+                <a data-remote="true" rel="nofollow" data-method="patch" href="https://my.projo.berlin/app/structure_bookings/5100005/leaf_chosen?user_id=1001">
+                  Standort Süd
+</a>
+            </td>
+            <td>
+              <span class="badge bg-state-dark">nicht abrechenbar</span>
+            </td>
+          </tr>
+          <tr class=" text-decoration-line-through hide " title="Leistung ist nicht buchbar">
+            <td>
+              2.1.2.3
+            </td>
+            <td  style="padding-left:4.1em">
+                Standort West
+            </td>
+            <td>
+              <span class="badge bg-state-green">fertig</span>
+            </td>
+          </tr>
+          <tr class="
+             "
+             >
+            <td>
+              2.1.3
+            </td>
+            <td  style="padding-left:2.9em">
+                <a data-remote="true" rel="nofollow" data-method="patch" href="https://my.projo.berlin/app/structure_bookings/5100003/leaf_chosen?user_id=1001">
+                  Basisprojekt
+</a>
+            </td>
+            <td>
+              <span class="badge bg-state-orange">laufend</span>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+  </div>
+</div>

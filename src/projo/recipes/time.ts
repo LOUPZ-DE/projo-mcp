@@ -1,8 +1,9 @@
 import * as cheerio from 'cheerio';
-import { ProjoError } from '../errors.js';
+import { isProjoError, ProjoError } from '../errors.js';
 import { submitForm } from '../form.js';
 import { csrfFromPage } from '../http.js';
 import { extractHtmlFromJs } from '../util/dom.js';
+import { recordDrift } from '../../harness/drift.js';
 import { parseWithFallback } from '../../harness/fallback.js';
 import { analysisSpec, daySpec, monthSpec } from '../pages/time-fallback.js';
 import { log } from '../../util/log.js';
@@ -13,12 +14,14 @@ import {
   parseHoursAnalysis,
   parseMonthView,
   parseTaskOptions,
+  parseTaskTree,
   type Booking,
   type BookingFormInfo,
   type ContractInfo,
   type DayView,
   type HoursAnalysis,
   type MonthView,
+  type TaskTreeNode,
 } from '../pages/time.js';
 import type { ProjoSessionManager, ProjoUserContext } from '../session.js';
 import {
@@ -56,12 +59,33 @@ export interface TaskOption {
   label: string;
   /** false = Name aus der Gesamtliste, dort kürzt projo lange Namen in der Mitte („ ... “) */
   complete: boolean;
+  /** Knoten im Leistungsbaum – verbindet den Select-Eintrag mit Nummer, Pfad und Status */
+  leafId?: string;
+  /** aus dem Leistungsbaum: Gliederungsnummer, z. B. "2.1.1.1.7" */
+  number?: string;
+  /** aus dem Leistungsbaum: übergeordnete Ebenen, z. B. ["Leistungsstufe 2", "Planungsmanagement", …] */
+  path?: string[];
+  /** aus dem Leistungsbaum: Name der Leistung selbst (letzte Ebene, z. B. ein Standort) */
+  leafName?: string;
+  /** aus dem Leistungsbaum: Status, z. B. "laufend" oder "nicht abrechenbar" */
+  status?: string;
+}
+
+/** Baumzeile einer buchbaren Leistung, aufbereitet für Suche und Anzeige */
+interface TreeEntry {
+  order: number;
+  number?: string;
+  name: string;
+  path: string[];
+  status?: string;
 }
 
 interface UserOptionsCache {
   form?: { at: number; info: BookingFormInfo; csrf?: string };
   /** Leistungen je Vertrag (treatyId → Liste mit vollen Namen) */
   contracts: Map<string, { at: number; tasks: TaskOption[] }>;
+  /** Leistungsbaum je Vertrag (treatyId → leafId → Eintrag); undefined = nicht lesbar */
+  trees: Map<string, { at: number; index?: Map<string, TreeEntry> }>;
   /** Gesamtliste aller buchbaren Leistungen */
   all?: { at: number; tasks: TaskOption[]; source: 'gesamtliste' | 'je-vertrag' };
 }
@@ -70,7 +94,7 @@ const caches = new Map<string, UserOptionsCache>();
 const cacheOf = (email: string): UserOptionsCache => {
   let c = caches.get(email);
   if (!c) {
-    c = { contracts: new Map() };
+    c = { contracts: new Map(), trees: new Map() };
     caches.set(email, c);
   }
   return c;
@@ -105,14 +129,46 @@ export function bookingMatchesTask(b: Booking, t: TaskOption): boolean {
   return labelMatches(b.label, t.label) || labelMatches(t.label, b.label);
 }
 
-const toOption = (raw: { taskId: string; name: string }, contract: string | undefined, contractTitle?: string): TaskOption => ({
+const toOption = (raw: { taskId: string; name: string; leafId?: string }, contract: string | undefined, contractTitle?: string): TaskOption => ({
   taskId: raw.taskId,
   ...(contract ? { contract } : {}),
   ...(contractTitle ? { contractTitle } : {}),
   name: raw.name,
   label: contract ? `${contract} - ${raw.name}` : raw.name,
   complete: !raw.name.includes(' ... '),
+  ...(raw.leafId ? { leafId: raw.leafId } : {}),
 });
+
+/** Baumzeilen → buchbare Leistungen (leafId) mit Pfad aus den übergeordneten Ebenen */
+function indexTree(nodes: TaskTreeNode[]): Map<string, TreeEntry> {
+  const index = new Map<string, TreeEntry>();
+  const stack: string[] = [];
+  nodes.forEach((n, order) => {
+    stack.length = Math.min(stack.length, n.level - 1);
+    if (n.leafId) {
+      index.set(n.leafId, { order, ...(n.number ? { number: n.number } : {}), name: n.name, path: stack.filter(Boolean), ...(n.status ? { status: n.status } : {}) });
+    }
+    stack[n.level - 1] = n.name;
+  });
+  return index;
+}
+
+/** Select-Einträge um Nummer, Pfad und Status aus dem Leistungsbaum ergänzen (Schlüssel: leafId). */
+function withTree(tasks: TaskOption[], index: Map<string, TreeEntry> | undefined): TaskOption[] {
+  if (!index) return tasks;
+  const enriched = tasks.map((t) => {
+    const e = t.leafId ? index.get(t.leafId) : undefined;
+    return e ? { ...t, ...(e.number ? { number: e.number } : {}), path: e.path, leafName: e.name, ...(e.status ? { status: e.status } : {}) } : t;
+  });
+  // je Vertrag in der Reihenfolge des Baums (Gliederung), Einträge ohne Baumzeile ans Ende
+  const contractRank = new Map<string | undefined, number>();
+  for (const t of tasks) if (!contractRank.has(t.contract)) contractRank.set(t.contract, contractRank.size);
+  const order = (t: TaskOption) => (t.leafId ? (index.get(t.leafId)?.order ?? Infinity) : Infinity);
+  return enriched
+    .map((t, i) => ({ t, i }))
+    .sort((a, b) => contractRank.get(a.t.contract)! - contractRank.get(b.t.contract)! || order(a.t) - order(b.t) || a.i - b.i)
+    .map((x) => x.t);
+}
 
 // ─── Lesen ───────────────────────────────────────────────────────────────────
 
@@ -123,36 +179,39 @@ export interface TimeEntriesResult {
   days: { date: string; bookings: Booking[]; totalHours: number; balance?: string }[];
   totalHours: number;
   months?: { month: string; title?: string; summary: MonthView['summary'] }[];
-  /** true = mindestens eine Seite per KI-Ausweich-Extraktion gelesen (projo-Oberfläche geändert) */
+  /** true = mindestens eine Seite per KI-Ausweich-Extraktion gelesen (projo-Oberfläche nicht erkannt) */
   degraded?: boolean;
+  /** Tage (Tagesansicht) bzw. Monate (Monatsansicht), die per KI-Ausweich-Extraktion gelesen wurden */
+  degradedPages?: string[];
 }
 
 export async function timeEntries(sessions: ProjoSessionManager, email: string, from: string, to: string): Promise<TimeEntriesResult> {
   validateRange(from, to);
   return sessions.withUser(email, async (ctx) => {
     const uid = await sessions.userId(ctx);
-    let degraded = false;
+    const degradedPages: string[] = [];
+    const flags = () => (degradedPages.length > 0 ? { degraded: true, degradedPages } : {});
     if (daysInclusive(from, to) <= DAY_MODE_MAX_DAYS) {
       const days: TimeEntriesResult['days'] = [];
       for (let d = from; d <= to; d = addDays(d, 1)) {
         const page = await ctx.http.getPage(dayPath(uid, d));
         const r = await parseWithFallback(page.html, () => parseDayView(page.$, d), daySpec(d));
-        degraded ||= r.degraded;
+        if (r.degraded) degradedPages.push(d);
         if (r.value.bookings.length > 0) days.push(r.value);
       }
-      return { from, to, source: 'tagesansicht', days, totalHours: roundHours(days.reduce((s, d) => s + d.totalHours, 0)), ...(degraded ? { degraded } : {}) };
+      return { from, to, source: 'tagesansicht', days, totalHours: roundHours(days.reduce((s, d) => s + d.totalHours, 0)), ...flags() };
     }
     const days: TimeEntriesResult['days'] = [];
     const months: NonNullable<TimeEntriesResult['months']> = [];
     for (const m of monthsBetween(from, to)) {
       const page = await ctx.http.getPage(`/app/months?date=${m}&user_id=${uid}`);
       const r = await parseWithFallback(page.html, () => parseMonthView(page.$, Number(m.slice(0, 4))), monthSpec(m.slice(0, 7)));
-      degraded ||= r.degraded;
+      if (r.degraded) degradedPages.push(m.slice(0, 7));
       const mv = r.value;
       months.push({ month: m.slice(0, 7), ...(mv.title ? { title: mv.title } : {}), summary: mv.summary });
       days.push(...mv.days.filter((d) => d.date >= from && d.date <= to && d.bookings.length > 0));
     }
-    return { from, to, source: 'monatsansicht', days, totalHours: roundHours(days.reduce((s, d) => s + d.totalHours, 0)), months, ...(degraded ? { degraded } : {}) };
+    return { from, to, source: 'monatsansicht', days, totalHours: roundHours(days.reduce((s, d) => s + d.totalHours, 0)), months, ...flags() };
   });
 }
 
@@ -245,6 +304,32 @@ async function loadContractsTasks(ctx: ProjoUserContext, uid: string, date: stri
   return out;
 }
 
+/**
+ * Leistungsbaum eines Vertrags („alle Leistungen“) – reiner GET, ändert nichts in projo. Liefert Nummer, Pfad und
+ * Status je buchbarer Leistung (Schlüssel leafId); nicht lesbar → undefined, die Suche nutzt dann die Namen.
+ */
+async function loadTree(ctx: ProjoUserContext, uid: string, treatyId: string): Promise<Map<string, TreeEntry> | undefined> {
+  const cache = cacheOf(ctx.record.mcpEmail);
+  const hit = cache.trees.get(treatyId);
+  if (hit && fresh(hit.at)) return hit.index;
+  const page = await ctx.http.getPage(`/app/structure_bookings/new?treaty_id=${treatyId}&user_id=${uid}`, { xhr: true }).catch((err: unknown) => {
+    if (isProjoError(err) && (err.code === 'projo_forbidden' || err.code === 'not_found')) return undefined;
+    throw err;
+  });
+  let index: Map<string, TreeEntry> | undefined;
+  if (page) {
+    try {
+      index = indexTree(parseTaskTree(page.$));
+    } catch (err) {
+      if (!isProjoError(err) || err.code !== 'drift_detected') throw err;
+      recordDrift('time_tree', page.html, err.message);
+      log('warn', 'projo: Leistungsbaum nicht lesbar – Suche nutzt die Namen', { user: ctx.record.mcpEmail, reason: err.message });
+    }
+  }
+  cache.trees.set(treatyId, { at: Date.now(), ...(index ? { index } : {}) });
+  return index;
+}
+
 /** Alle buchbaren Leistungen: schnell über die Gesamtliste (edit_task), sonst Vertrag für Vertrag. */
 async function loadAllTasks(ctx: ProjoUserContext, uid: string, date: string): Promise<{ tasks: TaskOption[]; source: 'gesamtliste' | 'je-vertrag' }> {
   const cache = cacheOf(ctx.record.mcpEmail);
@@ -291,13 +376,55 @@ function findContract(info: BookingFormInfo, wanted: string): ContractInfo {
 
 export interface TimeOptionsResult {
   date: string;
-  /** Verträge der Person (Chips „Filtern auf Vertrag“) */
-  contracts: { code: string; title?: string; active: boolean }[];
-  /** Vertrag, auf den sich `tasks` bezieht (bei contract-Abfrage oder ohne query) */
-  contract?: string;
-  source: 'vertrag' | 'gesamtliste' | 'je-vertrag';
+  /** Überblick: alle Verträge der Person; Suche: nur Verträge mit Treffern (ohne Treffer: alle, zum Eingrenzen) */
+  contracts?: { code: string; title?: string; active?: boolean; matches?: number }[];
+  /** Vertrag, auf den sich `tasks` bezieht (contract-Abfrage bzw. aktiver Vertrag im Überblick) */
+  contract?: { code: string; title?: string };
+  source: 'vertrag' | 'leistungsbaum' | 'gesamtliste' | 'je-vertrag';
   tasks: TaskOption[];
   matches: number;
+}
+
+const contractRef = (c: ContractInfo) => ({ code: c.code, ...(c.title ? { title: c.title } : {}) });
+const searchText = (parts: (string | undefined)[]) => normalize(parts.filter(Boolean).join(' '));
+/** Suchtext einer Leistung: Vertrag, Gliederungsnummer, übergeordnete Ebenen und Name */
+const taskText = (t: TaskOption) => searchText([t.contract, t.contractTitle, t.number, ...(t.path ?? []), t.leafName ?? t.name]);
+
+/**
+ * Suche über alle Verträge: zuerst in den Leistungsbäumen (nur lesend, volle Namen inkl. Pfad), die taskIds dann
+ * nur für Verträge mit Treffern über den Vertragsfilter. Ganz ohne lesbaren Baum: Gesamtliste wie bisher.
+ */
+async function searchAllContracts(
+  ctx: ProjoUserContext,
+  uid: string,
+  date: string,
+  info: BookingFormInfo,
+  hit: (text: string) => boolean,
+): Promise<{ tasks: TaskOption[]; source: TimeOptionsResult['source'] }> {
+  const merged = new Map<string, TreeEntry>();
+  const load: ContractInfo[] = [];
+  let trees = 0;
+  for (const c of info.contracts) {
+    if (!c.treatyId) continue;
+    const index = await loadTree(ctx, uid, c.treatyId);
+    if (index) {
+      trees++;
+      for (const [leafId, e] of index) merged.set(leafId, e);
+    }
+    // ohne lesbaren Baum: Leistungen des Vertrags laden und über die Namen suchen
+    if (!index || [...index.values()].some((e) => hit(searchText([c.code, c.title, e.number, ...e.path, e.name])))) load.push(c);
+  }
+  if (trees > 0) return { tasks: withTree(await loadContractsTasks(ctx, uid, date, load), merged), source: 'leistungsbaum' };
+
+  const all = await loadAllTasks(ctx, uid, date);
+  // In gekürzten Namen der Gesamtliste fehlt der Mittelteil → ohne Treffer volle Listen aller Verträge laden
+  if (all.tasks.some((t) => hit(taskText(t))) || all.tasks.every((t) => t.complete)) return all;
+  const tasks = await loadContractsTasks(ctx, uid, date, info.contracts);
+  const cache = cacheOf(ctx.record.mcpEmail);
+  const byId = new Map((cache.all?.tasks ?? []).map((t) => [t.taskId, t]));
+  for (const t of tasks) byId.set(t.taskId, t);
+  cache.all = { at: Date.now(), tasks: [...byId.values()], source: 'je-vertrag' };
+  return { tasks, source: 'je-vertrag' };
 }
 
 export async function timeOptions(
@@ -310,40 +437,48 @@ export async function timeOptions(
   return sessions.withUser(email, async (ctx) => {
     const uid = await sessions.userId(ctx);
     const { info } = await loadForm(ctx, uid, date);
-    const contracts = info.contracts.map((c) => ({ code: c.code, ...(c.title ? { title: c.title } : {}), active: c.active }));
     const words = normalize(opts.query ?? '').split(/\s+/).filter(Boolean);
-    const match = (t: TaskOption) => words.every((w) => normalize(`${t.label} ${t.contractTitle ?? ''}`).includes(w));
+    const hit = (text: string) => words.every((w) => text.includes(w));
+    const result = (tasks: TaskOption[], rest: Pick<TimeOptionsResult, 'contracts' | 'contract' | 'source'>): TimeOptionsResult => {
+      const matches = tasks.filter((t) => hit(taskText(t)));
+      return { date, ...rest, tasks: matches.slice(0, limit), matches: matches.length };
+    };
 
-    let pool: TaskOption[];
-    let source: TimeOptionsResult['source'];
-    let contract: string | undefined;
     if (opts.contract) {
       const c = findContract(info, opts.contract);
-      pool = await loadContractsTasks(ctx, uid, date, [c]);
-      source = 'vertrag';
-      contract = c.code;
-    } else if (words.length > 0) {
-      const all = await loadAllTasks(ctx, uid, date);
-      pool = all.tasks;
-      source = all.source;
-      // In gekürzten Namen der Gesamtliste fehlt der Mittelteil → ohne Treffer volle Listen aller Verträge laden
-      if (!pool.some(match) && pool.some((t) => !t.complete)) {
-        pool = await loadContractsTasks(ctx, uid, date, info.contracts);
-        source = 'je-vertrag';
-        const cache = cacheOf(ctx.record.mcpEmail);
-        const byId = new Map((cache.all?.tasks ?? []).map((t) => [t.taskId, t]));
-        for (const t of pool) byId.set(t.taskId, t);
-        cache.all = { at: Date.now(), tasks: [...byId.values()], source: 'je-vertrag' };
-      }
-    } else {
-      const title = info.contracts.find((c) => c.active)?.title;
-      pool = info.tasks.map((t) => toOption(t, info.activeContract, title));
-      source = 'vertrag';
-      contract = info.activeContract;
+      const tasks = await loadContractsTasks(ctx, uid, date, [c]);
+      return result(withTree(tasks, c.treatyId ? await loadTree(ctx, uid, c.treatyId) : undefined), { contract: contractRef(c), source: 'vertrag' });
     }
-    const matches = pool.filter(match);
-    return { date, contracts, ...(contract ? { contract } : {}), source, tasks: matches.slice(0, limit), matches: matches.length };
+    if (words.length === 0) {
+      const active = info.contracts.find((c) => c.active);
+      const tasks = info.tasks.map((t) => toOption(t, info.activeContract, active?.title));
+      return result(withTree(tasks, info.activeTreatyId ? await loadTree(ctx, uid, info.activeTreatyId) : undefined), {
+        contracts: info.contracts.map((c) => ({ ...contractRef(c), active: c.active })),
+        ...(active ? { contract: contractRef(active) } : {}),
+        source: 'vertrag',
+      });
+    }
+
+    const found = await searchAllContracts(ctx, uid, date, info, hit);
+    const r = result(found.tasks, { source: found.source });
+    const perContract = new Map<string, number>();
+    for (const t of found.tasks) if (t.contract && hit(taskText(t))) perContract.set(t.contract, (perContract.get(t.contract) ?? 0) + 1);
+    // nur Verträge mit Treffern – ohne Treffer alle, damit gezielt ein Vertrag gewählt werden kann
+    const contracts =
+      r.matches > 0
+        ? info.contracts.filter((c) => perContract.has(c.code)).map((c) => ({ ...contractRef(c), matches: perContract.get(c.code)! }))
+        : info.contracts.map((c) => ({ ...contractRef(c), active: c.active }));
+    return { ...r, contracts };
   });
+}
+
+/** Obere Ebenen, die alle Leistungen (eines Vertrags) teilen – im Tool-Ergebnis einmal statt in jedem Pfad. */
+export function commonLevels(tasks: TaskOption[]): string[] {
+  if (tasks.length < 2 || new Set(tasks.map((t) => t.contract)).size > 1 || tasks.some((t) => !t.path?.length)) return [];
+  const first = tasks[0]!.path!;
+  let n = 0;
+  while (n < first.length && tasks.every((t) => t.path![n] === first[n])) n++;
+  return first.slice(0, n);
 }
 
 /** taskId → Leistung; prüft, dass die Person sie buchen kann (projo selbst prüft das nicht). */

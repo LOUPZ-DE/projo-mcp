@@ -1,9 +1,10 @@
 import { randomBytes } from 'node:crypto';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createBooking, deleteBooking, timeEntries, timeOptions, updateBooking } from '../src/projo/recipes/time.js';
+import { driftDir } from '../src/harness/drift.js';
+import { commonLevels, createBooking, deleteBooking, timeEntries, timeOptions, updateBooking } from '../src/projo/recipes/time.js';
 import { ProjoSessionManager } from '../src/projo/session.js';
 import { Vault } from '../src/projo/vault.js';
 import { startFakeProjo, type FakeProjo } from './fake-projo/server.js';
@@ -15,8 +16,15 @@ import { startFakeProjo, type FakeProjo } from './fake-projo/server.js';
 
 let fake: FakeProjo;
 let mgr: ProjoSessionManager;
-const USER = 'zeit@example.com';
+let USER = '';
+let run = 0;
 const DATE = '2026-03-10';
+/** Vertragsfilter-Wechsel seit `from` (filtered_treaty_id bzw. „ohne“) */
+const filterSwitches = (from: number) =>
+  fake.requests
+    .slice(from)
+    .filter((q) => q.method === 'PATCH' && q.path.includes('filter_treaty'))
+    .map((q) => /filtered_treaty_id=(\d+)/.exec(q.path)?.[1] ?? 'ohne');
 
 beforeAll(async () => {
   fake = await startFakeProjo();
@@ -29,10 +37,13 @@ beforeEach(async () => {
   await mgr?.shutdown();
   fake.bookings.clear();
   fake.state.rejectCsrf = false;
+  fake.state.treeBroken = false;
+  fake.state.lockedDays.clear();
   // eine vorhandene Buchung → Gesamtliste der Leistungen per edit_task verfügbar
   fake.seedBooking({ date: DATE, taskId: '6000001', minutes: 120 });
   const vault = new Vault(join(mkdtempSync(join(tmpdir(), 'time-')), 'vault'), randomBytes(32));
-  // eindeutiger Nutzer je Test → keine Cache-Effekte zwischen Tests
+  // eindeutiger Nutzer je Test → keine Cache-Effekte (Leistungslisten, Bäume) zwischen Tests
+  USER = `zeit-${++run}@example.com`;
   mgr = new ProjoSessionManager({ vault, baseUrl: fake.url, idleMs: 60_000, storePasswords: false, lockTimeoutMs: 15_000 });
   await mgr.connectWithPassword(USER, 'erika@example.com', 'geheim', false);
 });
@@ -76,11 +87,72 @@ describe('Arbeitszeit buchen', () => {
     expect(r.booking.label).toBe('1000-Projekt-01 - Leistungsstufe 2 - Kostenmanagement - Kostensteuerung zur Einhaltung der Kostenziele - Standort Süd');
   });
 
-  it('findet über alle Verträge auch Wörter aus dem gekürzten Mittelteil der Gesamtliste', async () => {
+  it('findet über alle Verträge auch Wörter aus übergeordneten Ebenen (Leistungsbaum, in der Gesamtliste gekürzt)', async () => {
     const r = await timeOptions(mgr, USER, { query: 'Einhaltung Nord' });
     expect(r.tasks.map((t) => t.taskId)).toEqual(['6100001']);
-    expect(r.source).toBe('je-vertrag');
+    expect(r.source).toBe('leistungsbaum');
     expect(fake.activeTreaty()).toBe('700002');
+  });
+});
+
+describe('Leistungen finden', () => {
+  it('unterscheidet gleichnamige Leistungen über Nummer und Pfad – Filterwechsel nur für Verträge mit Treffern', async () => {
+    const before = fake.requests.length;
+    const r = await timeOptions(mgr, USER, { query: 'Standort Nord' });
+    expect(r.tasks.map((t) => [t.taskId, t.number, t.leafName, t.path])).toEqual([
+      ['6100001', '2.1.1.1', 'Standort Nord', ['Leistungsstufe 2', 'Kostenmanagement', 'Kostensteuerung zur Einhaltung der Kostenziele']],
+      ['6100004', '2.1.2.1', 'Standort Nord', ['Leistungsstufe 2', 'Kostenmanagement', 'Kostenkontrolle']],
+    ]);
+    // nur Verträge mit Treffern statt aller Verträge der Person
+    expect(r.contracts).toEqual([{ code: '1000-Projekt-01', title: 'Neubau Musterschule', matches: 2 }]);
+    expect(filterSwitches(before)).toEqual(['700001', '700002']); // einmal hin, einmal zurück
+    expect(fake.activeTreaty()).toBe('700002');
+  });
+
+  it('nennt gemeinsame obere Ebenen der Treffer einmal (commonPath statt Wiederholung)', async () => {
+    const r = await timeOptions(mgr, USER, { query: 'Kostenmanagement Standort' });
+    expect(r.tasks.map((t) => t.taskId)).toEqual(['6100001', '6100002', '6100004', '6100005']);
+    expect(commonLevels(r.tasks)).toEqual(['Leistungsstufe 2', 'Kostenmanagement']);
+    expect(commonLevels(r.tasks.slice(0, 2))).toEqual(['Leistungsstufe 2', 'Kostenmanagement', 'Kostensteuerung zur Einhaltung der Kostenziele']);
+    expect(commonLevels(r.tasks.slice(0, 1))).toEqual([]);
+  });
+
+  it('sucht auch über die Gliederungsnummer und meldet den Status', async () => {
+    const r = await timeOptions(mgr, USER, { query: '2.1.2.2' });
+    expect(r.tasks).toEqual([expect.objectContaining({ taskId: '6100005', leafName: 'Standort Süd', status: 'nicht abrechenbar' })]);
+  });
+
+  it('Überblick ohne Parameter: alle Verträge + Leistungen des aktiven Vertrags mit Gliederung, ohne Filterwechsel', async () => {
+    const before = fake.requests.length;
+    const r = await timeOptions(mgr, USER, {});
+    expect(r.contract).toEqual({ code: '2000-Intern-08', title: 'Interne Leistungen' });
+    expect(r.contracts).toEqual([
+      { code: '1000-Projekt-01', title: 'Neubau Musterschule', active: false },
+      { code: '2000-Intern-08', title: 'Interne Leistungen', active: true },
+    ]);
+    expect(r.tasks.map((t) => [t.number, t.leafName, t.path])).toEqual([
+      ['1', 'Hardware', []],
+      ['2', 'IT-Support', []],
+      ['3.1', 'Werkzeug A', ['Eigenentwicklungen']],
+    ]);
+    expect(filterSwitches(before)).toEqual([]);
+  });
+
+  it('ohne Treffer alle Verträge zum Eingrenzen – ohne Filterwechsel', async () => {
+    const before = fake.requests.length;
+    const r = await timeOptions(mgr, USER, { query: 'Gibtsnicht' });
+    expect(r.matches).toBe(0);
+    expect(r.contracts?.map((c) => c.code)).toEqual(['1000-Projekt-01', '2000-Intern-08']);
+    expect(filterSwitches(before)).toEqual([]);
+  });
+
+  it('ohne lesbaren Leistungsbaum: Suche wie bisher über die Namen, Schnappschuss für die Reparatur', async () => {
+    fake.state.treeBroken = true;
+    const r = await timeOptions(mgr, USER, { query: 'Einhaltung Nord' });
+    expect(r.source).toBe('je-vertrag');
+    expect(r.tasks.map((t) => [t.taskId, t.number])).toEqual([['6100001', undefined]]);
+    expect(fake.activeTreaty()).toBe('700002');
+    expect(readdirSync(driftDir()).some((f) => f.endsWith('time_tree.html'))).toBe(true);
   });
 });
 
@@ -113,5 +185,13 @@ describe('Zeitbuchungen lesen', () => {
     expect(r.source).toBe('tagesansicht');
     expect(r.days).toEqual([{ date: DATE, bookings: [expect.objectContaining({ hours: 2, task: 'Hardware' })], totalHours: 2 }]);
     await expect(timeEntries(mgr, USER, '2026-01-01', '2026-12-31')).rejects.toMatchObject({ code: 'invalid_input' });
+  });
+
+  it('liest Tage ohne Buchung im gesperrten Zeitraum als leer – ohne KI-Reserve und ohne degraded', async () => {
+    fake.state.lockedDays.add('2026-10-26');
+    fake.state.lockedDays.add('2026-10-27');
+    const r = await timeEntries(mgr, USER, '2026-10-26', '2026-10-27');
+    expect(r).toMatchObject({ source: 'tagesansicht', days: [], totalHours: 0 });
+    expect(r.degraded).toBeUndefined();
   });
 });

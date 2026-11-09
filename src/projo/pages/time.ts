@@ -57,11 +57,30 @@ function bookingFromCells($: CheerioAPI, row: ReturnType<CheerioAPI>, id?: strin
   };
 }
 
+/**
+ * Kopf der Tagesansicht genau dieses Datums: die Datumsauswahl verweist auf `/app/dates/<datum>`.
+ * Einziges sicheres Merkmal für Tage ohne Buchung in gesperrten Zeiträumen – dort fehlt der Button „Zeitbuchung“.
+ */
+function isDayHeader($: CheerioAPI, date: string): boolean {
+  const href = $('#datepicker').first().attr('href') ?? '';
+  let url = href;
+  try {
+    url = decodeURIComponent(href);
+  } catch {
+    // unvollständig kodiert – roh vergleichen
+  }
+  return url.includes(`current_date=${date}`) && url.includes(`/app/dates/${date}`);
+}
+
 /** Tagesansicht `/app/dates/<datum>` – auch das HTML aus JS-Antworten nach Writes (#show wird neu gerendert). */
 export function parseDayView($: CheerioAPI, date: string): DayView {
   const rows = $('tr[id^="booking-"]').toArray();
-  const looksLikeDay = rows.length > 0 || $('a[href*="/app/bookings/new"]').length > 0 || $('#sortable-parent').length > 0;
+  const looksLikeDay = rows.length > 0 || $('a[href*="/app/bookings/new"]').length > 0 || $('#sortable-parent').length > 0 || isDayHeader($, date);
   if (!looksLikeDay) throw new ProjoError('drift_detected', 'Die Tagesansicht von projo hat ein unerwartetes Format.');
+  // Dauer-Felder ohne erkennbare Buchungszeile → Zeilenformat geändert; nicht still „keine Buchungen“ melden
+  if ($('[data-bip-attribute="duration_in_hour_min_str"]').filter((_, el) => $(el).closest('tr[id^="booking-"]').length === 0).length > 0) {
+    throw new ProjoError('drift_detected', 'Die Buchungszeilen der Tagesansicht haben ein unerwartetes Format.');
+  }
 
   const bookings: Booking[] = [];
   for (const r of rows) {
@@ -208,6 +227,42 @@ export function parseAllTasks($: CheerioAPI): { taskId: string; label: string; c
       return { taskId, label, ...(contract ? { contract } : {}) };
     })
     .filter((t) => /^\d+$/.test(t.taskId));
+}
+
+export interface TaskTreeNode {
+  /** Gliederungsnummer, z. B. "2.1.1.1.7" */
+  number?: string;
+  /** Ebene im Baum, 1 = oberste */
+  level: number;
+  name: string;
+  /** Status-Badge, z. B. "laufend", "nicht abrechenbar", "fertig" */
+  status?: string;
+  /** nur bei buchbaren Leistungen (Link „leaf_chosen“) – dieselbe ID wie `leafId` im Leistungs-Select */
+  leafId?: string;
+}
+
+/**
+ * Leistungsbaum eines Vertrags („alle Leistungen“, `GET /app/structure_bookings/new?treaty_id=`, nur lesend):
+ * Gliederung mit Nummern, vollen Namen und Status. Nicht buchbare Zeilen (ausgeblendet, durchgestrichen) haben
+ * keinen Link und damit keine leafId, bleiben aber als Ebene im Pfad erhalten.
+ */
+export function parseTaskTree($: CheerioAPI): TaskTreeNode[] {
+  const table = $('table#treaty_tree');
+  if (table.length === 0) throw new ProjoError('drift_detected', 'Die Leistungsübersicht („alle Leistungen“) von projo hat ein unerwartetes Format.');
+  const nodes: TaskTreeNode[] = [];
+  for (const tr of table.find('tbody tr').toArray()) {
+    const td = $(tr).children('td');
+    const name = cleanText(td.eq(1).text());
+    if (!name) continue;
+    const number = cleanText(td.eq(0).text());
+    // Ebene aus der Nummer, sonst aus der Einrückung (0.5em, 1.7em, 2.9em, … je Ebene +1.2em)
+    const pad = Number(/padding-left:\s*([\d.]+)em/.exec(td.eq(1).attr('style') ?? '')?.[1] ?? '0.5');
+    const level = /^\d+(\.\d+)*$/.test(number) ? number.split('.').length : Math.max(1, Math.round((pad - 0.5) / 1.2) + 1);
+    const leafId = /structure_bookings\/(\d+)\/leaf_chosen/.exec(td.eq(1).find('a[href*="leaf_chosen"]').attr('href') ?? '')?.[1];
+    const status = cleanText(td.eq(2).text());
+    nodes.push({ ...(number ? { number } : {}), level, name, ...(status ? { status } : {}), ...(leafId ? { leafId } : {}) });
+  }
+  return nodes;
 }
 
 export interface HoursAnalysis {
