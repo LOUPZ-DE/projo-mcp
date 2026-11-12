@@ -1,5 +1,5 @@
 import * as cheerio from 'cheerio';
-import { isProjoError, ProjoError } from '../errors.js';
+import { isProjoError, ProjoError, SessionExpiredError } from '../errors.js';
 import { submitForm } from '../form.js';
 import { csrfFromPage } from '../http.js';
 import { extractHtmlFromJs } from '../util/dom.js';
@@ -197,7 +197,8 @@ export async function timeEntries(sessions: ProjoSessionManager, email: string, 
         const page = await ctx.http.getPage(dayPath(uid, d));
         const r = await parseWithFallback(page.html, () => parseDayView(page.$, d), daySpec(d));
         if (r.degraded) degradedPages.push(d);
-        if (r.value.bookings.length > 0) days.push(r.value);
+        // gesperrte Buchungen tragen locked; der Sperrvermerk je Tag wäre nur Ballast
+        if (r.value.bookings.length > 0) days.push({ date: d, bookings: r.value.bookings, totalHours: r.value.totalHours });
       }
       return { from, to, source: 'tagesansicht', days, totalHours: roundHours(days.reduce((s, d) => s + d.totalHours, 0)), ...flags() };
     }
@@ -520,14 +521,73 @@ export interface WriteResult {
   task?: TaskOption;
 }
 
+/** projo lehnt Arbeitszeit in der Zukunft ab („Arbeitszeiterfassung für die Zukunft ist nicht möglich“) – vorab prüfen. */
+function assertNotFuture(date: string): void {
+  if (date > todayBerlin()) throw new ProjoError('invalid_input', `Arbeitszeit in der Zukunft (${date}) nimmt projo nicht an.`);
+}
+
 function validateDescription(d: string | undefined): string {
   const text = (d ?? '').trim();
   if (text.length > 2000) throw new ProjoError('invalid_input', 'Die Beschreibung ist zu lang (max. 2000 Zeichen).');
   return text;
 }
 
+/**
+ * Eine Buchung anlegen – Sitzung offen, Leistung aufgelöst, Tag gelesen: Doppelbuchungsschutz, Formular absenden,
+ * Ergebnis in der neu gerenderten Tagesansicht bestätigen.
+ */
+async function bookOne(ctx: ProjoUserContext, uid: string, input: CreateInput, description: string, task: TaskOption, before: DayView): Promise<WriteResult> {
+  // Doppelbuchungsschutz: Clients wiederholen Aufrufe bei Timeouts
+  const duplicate = before.bookings.find(
+    (b) => bookingMatchesTask(b, task) && Math.abs(b.hours - input.hours) < 1e-6 && (b.description ?? '') === description,
+  );
+  if (duplicate && !input.allowDuplicate) return { status: 'already_exists', booking: duplicate, day: before, task };
+  // projo blendet in gesperrten Zeiträumen nur den Button aus, nimmt die Buchung serverseitig aber an
+  if (before.lockNote) throw new ProjoError('validation_failed', `Für ${input.date} nimmt projo keine neuen Buchungen an: ${before.lockNote}`);
+
+  const formPage = await ctx.http.getPage(`/app/bookings/new?date=${input.date}&user_id=${uid}`);
+  const result = await submitForm(ctx.http, {
+    page: formPage,
+    selector: '#new_time_tracking_booking',
+    overrides: {
+      'time_tracking_booking[duration_in_hour_min_str]': formatDuration(input.hours),
+      'time_tracking_booking[task_id]': input.taskId,
+      'time_tracking_booking[description]': description,
+    },
+    submitter: 'commit',
+  });
+  if (!result.ok) {
+    throw new ProjoError('validation_failed', `projo hat die Buchung abgelehnt: ${result.errors.join('; ')}`, { errors: result.errors });
+  }
+
+  // Ergebnis bestätigen: Antwort enthält die neu gerenderte Tagesansicht, sonst nachlesen
+  const beforeIds = new Set(before.bookings.map((b) => b.id));
+  let after: DayView | undefined;
+  try {
+    after = parseDayView(cheerio.load(result.html), input.date);
+  } catch {
+    after = undefined;
+  }
+  let created = after?.bookings.filter((b) => b.id && !beforeIds.has(b.id)) ?? [];
+  if (!after || created.length !== 1) {
+    after = (await readDay(ctx, uid, input.date)).view;
+    created = after.bookings.filter((b) => b.id && !beforeIds.has(b.id));
+  }
+  if (created.length !== 1) {
+    throw new ProjoError('drift_detected', `Nach dem Buchen wurden ${created.length} neue Buchungen gefunden statt einer – bitte in projo prüfen.`, {
+      newBookings: created,
+    });
+  }
+  const booking = created[0]!;
+  if (Math.abs(booking.hours - input.hours) > 1e-6 || !bookingMatchesTask(booking, task)) {
+    throw new ProjoError('drift_detected', 'Die Buchung wurde angelegt, weicht aber von der Eingabe ab – bitte in projo prüfen.', { booking, expected: { hours: input.hours, task: task.label } });
+  }
+  return { status: 'created', booking, day: after, task };
+}
+
 export async function createBooking(sessions: ProjoSessionManager, email: string, input: CreateInput): Promise<WriteResult> {
   assertIsoDate(input.date);
+  assertNotFuture(input.date);
   assertBookableHours(input.hours);
   const description = validateDescription(input.description);
 
@@ -535,52 +595,112 @@ export async function createBooking(sessions: ProjoSessionManager, email: string
     const uid = await sessions.userId(ctx);
     const task = await resolveTask(ctx, uid, input.date, input.taskId);
     const before = (await readDay(ctx, uid, input.date)).view;
-
-    // Doppelbuchungsschutz: Clients wiederholen Aufrufe bei Timeouts
-    const duplicate = before.bookings.find(
-      (b) => bookingMatchesTask(b, task) && Math.abs(b.hours - input.hours) < 1e-6 && (b.description ?? '') === description,
-    );
-    if (duplicate && !input.allowDuplicate) return { status: 'already_exists', booking: duplicate, day: before, task };
-
-    const formPage = await ctx.http.getPage(`/app/bookings/new?date=${input.date}&user_id=${uid}`);
-    const result = await submitForm(ctx.http, {
-      page: formPage,
-      selector: '#new_time_tracking_booking',
-      overrides: {
-        'time_tracking_booking[duration_in_hour_min_str]': formatDuration(input.hours),
-        'time_tracking_booking[task_id]': input.taskId,
-        'time_tracking_booking[description]': description,
-      },
-      submitter: 'commit',
-    });
-    if (!result.ok) {
-      throw new ProjoError('validation_failed', `projo hat die Buchung abgelehnt: ${result.errors.join('; ')}`, { errors: result.errors });
-    }
-
-    // Ergebnis bestätigen: Antwort enthält die neu gerenderte Tagesansicht, sonst nachlesen
-    const beforeIds = new Set(before.bookings.map((b) => b.id));
-    let after: DayView | undefined;
-    try {
-      after = parseDayView(cheerio.load(result.html), input.date);
-    } catch {
-      after = undefined;
-    }
-    let created = after?.bookings.filter((b) => b.id && !beforeIds.has(b.id)) ?? [];
-    if (!after || created.length !== 1) {
-      after = (await readDay(ctx, uid, input.date)).view;
-      created = after.bookings.filter((b) => b.id && !beforeIds.has(b.id));
-    }
-    if (created.length !== 1) {
-      throw new ProjoError('drift_detected', `Nach dem Buchen wurden ${created.length} neue Buchungen gefunden statt einer – bitte in projo prüfen.`, {
-        newBookings: created,
-      });
-    }
-    const booking = created[0]!;
-    if (Math.abs(booking.hours - input.hours) > 1e-6 || !bookingMatchesTask(booking, task)) {
-      throw new ProjoError('drift_detected', 'Die Buchung wurde angelegt, weicht aber von der Eingabe ab – bitte in projo prüfen.', { booking, expected: { hours: input.hours, task: task.label } });
-    }
-    return { status: 'created', booking, day: after, task };
+    return bookOne(ctx, uid, input, description, task, before);
   });
+}
+
+/** höchstens so viele Buchungen je Sammelaufruf – hält auch große Wochen deutlich unter den Client-Timeouts */
+export const MAX_BATCH = 25;
+
+export interface BatchEntryResult {
+  /** Position in der Eingabe, ab 1 */
+  index: number;
+  date: string;
+  taskId: string;
+  /** skipped = nach einem Fehler nicht mehr versucht */
+  status: 'created' | 'already_exists' | 'failed' | 'skipped';
+  booking?: Booking;
+  task?: TaskOption;
+  error?: { code: string; message: string };
+}
+
+export interface BatchResult {
+  entries: BatchEntryResult[];
+  /** Stand der Tage, auf die gebucht wurde */
+  days: DayView[];
+}
+
+const errorInfo = (err: unknown) => (isProjoError(err) ? { code: err.code, message: err.message } : { code: 'internal_error', message: 'Unerwarteter Fehler.' });
+
+/**
+ * Mehrere Buchungen in einem Aufruf. Erst werden alle Einträge geprüft (Format, keine Zukunft, Leistung buchbar,
+ * Tag nicht gesperrt) – ist einer ungültig, wird nichts gebucht. Dann der Reihe nach wie createBooking, je Tag einmal
+ * gelesen und danach mit der neu gerenderten Tagesansicht weiter. Beim ersten Fehler Stopp, der Rest bleibt
+ * „skipped“; erneutes Übergeben ist sicher (Doppelbuchungsschutz).
+ */
+export async function createBookings(sessions: ProjoSessionManager, email: string, inputs: CreateInput[]): Promise<BatchResult> {
+  if (inputs.length === 0 || inputs.length > MAX_BATCH) throw new ProjoError('invalid_input', `Je Aufruf 1 bis ${MAX_BATCH} Buchungen.`);
+  const problems: string[] = [];
+  const rejectAll = () => new ProjoError('invalid_input', `Nichts gebucht – ${problems.join('; ')}`, { problems: [...problems] });
+  const descriptions = inputs.map((input, i) => {
+    try {
+      assertIsoDate(input.date);
+      assertNotFuture(input.date);
+      assertBookableHours(input.hours);
+      return validateDescription(input.description);
+    } catch (err) {
+      problems.push(`Eintrag ${i + 1}: ${err instanceof Error ? err.message : String(err)}`);
+      return '';
+    }
+  });
+  if (problems.length > 0) throw rejectAll();
+
+  // bleibt über einen Neuversuch nach stiller Neuanmeldung (withUser) erhalten – Erledigtes wird nicht wiederholt
+  const done = new Map<number, BatchEntryResult>();
+  const report = (failure?: { index: number; error: BatchEntryResult['error'] }, days: DayView[] = []): BatchResult => ({
+    entries: inputs.map((input, i) => {
+      const base = { index: i + 1, date: input.date, taskId: input.taskId };
+      if (done.has(i)) return done.get(i)!;
+      return failure?.index === i ? { ...base, status: 'failed', ...(failure.error ? { error: failure.error } : {}) } : { ...base, status: 'skipped' };
+    }),
+    days,
+  });
+
+  try {
+    return await sessions.withUser(email, async (ctx) => {
+      problems.length = 0; // Neuversuch nach stiller Neuanmeldung beginnt sauber
+      const uid = await sessions.userId(ctx);
+      const tasks = new Map<string, TaskOption>();
+      for (const [i, input] of inputs.entries()) {
+        if (tasks.has(input.taskId)) continue;
+        try {
+          tasks.set(input.taskId, await resolveTask(ctx, uid, input.date, input.taskId));
+        } catch (err) {
+          if (!isProjoError(err) || err.code !== 'invalid_input') throw err;
+          problems.push(`Eintrag ${i + 1}: ${err.message}`);
+        }
+      }
+      if (problems.length > 0) throw rejectAll();
+
+      // Tage vorab lesen (je Datum einmal): gesperrte Tage → nichts buchen statt mittendrin abzubrechen
+      const days = new Map<string, DayView>();
+      for (const [i, input] of inputs.entries()) {
+        if (done.has(i) || days.has(input.date)) continue;
+        const view = (await readDay(ctx, uid, input.date)).view;
+        days.set(input.date, view);
+        if (view.lockNote) problems.push(`Eintrag ${i + 1} (${input.date}): ${view.lockNote}`);
+      }
+      if (problems.length > 0) throw rejectAll();
+
+      for (const [i, input] of inputs.entries()) {
+        if (done.has(i)) continue;
+        let r: WriteResult;
+        try {
+          r = await bookOne(ctx, uid, input, descriptions[i]!, tasks.get(input.taskId)!, days.get(input.date)!);
+        } catch (err) {
+          if (err instanceof SessionExpiredError) throw err; // withUser meldet still neu an und wiederholt
+          return report({ index: i, error: errorInfo(err) }, [...days.values()]);
+        }
+        days.set(input.date, r.day);
+        done.set(i, { index: i + 1, date: input.date, taskId: input.taskId, status: r.status === 'created' ? 'created' : 'already_exists', booking: r.booking, task: r.task });
+      }
+      return report(undefined, [...days.values()]);
+    });
+  } catch (err) {
+    // z. B. Sitzung abgelaufen ohne stille Neuanmeldung: bereits Gebuchtes trotzdem melden
+    if (done.size === 0) throw err;
+    return report({ index: inputs.findIndex((_, i) => !done.has(i)), error: errorInfo(err) });
+  }
 }
 
 export interface UpdateInput {

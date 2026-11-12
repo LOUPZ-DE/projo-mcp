@@ -101,6 +101,13 @@ Felder `bookings[<task_id>][<YYYY-MM-DD>]` mit Wert `"08:00 h"`; gesperrte Tage 
 angelegt, ein ungültiger Dauerwert mit 204 quittiert. Das MCP-Tool muss deshalb selbst prüfen (Leistung Pflicht,
 Dauer > 0 im 15-min-Raster) und nach jedem Write die Tagesansicht auswerten (Antwort oder `refresh`).
 
+- **Gesperrte Zeiträume** (Sperre je Person, vom Büro fortgeschrieben, z. B. „bis zum 08.11.2026 gesperrt“): Die
+  Oberfläche blendet nur Button „Zeitbuchung“, Löschen-Link und Dauer-Bearbeitung aus – `POST /app/bookings` und
+  `DELETE /app/bookings/<id>` nimmt projo dort trotzdem an (beobachtet am 2026-11-12). Die Tools prüfen die Sperre
+  deshalb selbst (Sperrhinweis im Tageskopf bzw. fehlender Button) und buchen, ändern oder löschen dort nicht.
+- **Zukunft** lehnt projo ab: „Arbeitszeiterfassung für die Zukunft ist nicht möglich“ (Formularfehler) – die Tools
+  prüfen das vorab, damit eine Sammelbuchung nicht mittendrin abbricht.
+
 **CSRF:** Das Buchungsformular verschachtelt ein inneres Formular (`action="/time_tracking/bookings"`), dessen
 `authenticity_token` ein *formularbezogenes* Token für dieses andere Ziel ist. Für `POST /app/bookings` reicht es
 allein nicht – rails-ujs schickt zusätzlich das globale Token aus `<meta name="csrf-token">` als `X-CSRF-Token`.

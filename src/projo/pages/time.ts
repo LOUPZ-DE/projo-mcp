@@ -13,7 +13,7 @@ export interface Booking {
   /** projo-Buchungs-ID (nur aus der Tagesansicht) */
   id?: string;
   hours: number;
-  /** Anzeige wie in projo: "<Vertragscode> - <Leistung>" */
+  /** "<Vertragscode> - <Leistung>" wie in projo, von projo gekürzte Namen aus dem title vervollständigt */
   label: string;
   /** Vertragscode/Projekt, z. B. "1000-Projekt-01" */
   contract?: string;
@@ -28,11 +28,22 @@ export interface DayView {
   date: string;
   bookings: Booking[];
   totalHours: number;
+  /**
+   * Tag gesperrt (Hinweis „… gesperrt“ im Kopf bzw. kein Button „Zeitbuchung“) – projo nimmt neue Buchungen
+   * serverseitig trotzdem an, deshalb vorher prüfen. Nur aus der Tagesansicht, nicht aus JS-Antworten nach Writes.
+   */
+  lockNote?: string;
 }
 
 function splitLabel(label: string): { contract?: string; rest: string } {
   const i = label.indexOf(' - ');
   return i > 0 ? { contract: label.slice(0, i), rest: label.slice(i + 3) } : { rest: label };
+}
+
+/** projo kürzt lange Namen in der Anzeige in der Mitte („ ... “) – vollständig steht der Name nur im title-Attribut. */
+export function completeLabel(label: string, task: string | undefined): string {
+  const { contract } = splitLabel(label);
+  return label.includes(' ... ') && contract && task ? `${contract} - ${task}` : label;
 }
 
 function bookingFromCells($: CheerioAPI, row: ReturnType<CheerioAPI>, id?: string): Booking | undefined {
@@ -49,7 +60,7 @@ function bookingFromCells($: CheerioAPI, row: ReturnType<CheerioAPI>, id?: strin
   return {
     ...(id ? { id } : {}),
     hours: roundHours(hours),
-    label,
+    label: completeLabel(label, task),
     ...(contract ? { contract } : {}),
     ...(task ? { task } : {}),
     ...(description ? { description } : {}),
@@ -75,7 +86,8 @@ function isDayHeader($: CheerioAPI, date: string): boolean {
 /** Tagesansicht `/app/dates/<datum>` – auch das HTML aus JS-Antworten nach Writes (#show wird neu gerendert). */
 export function parseDayView($: CheerioAPI, date: string): DayView {
   const rows = $('tr[id^="booking-"]').toArray();
-  const looksLikeDay = rows.length > 0 || $('a[href*="/app/bookings/new"]').length > 0 || $('#sortable-parent').length > 0 || isDayHeader($, date);
+  const header = isDayHeader($, date);
+  const looksLikeDay = rows.length > 0 || $('a[href*="/app/bookings/new"]').length > 0 || $('#sortable-parent').length > 0 || header;
   if (!looksLikeDay) throw new ProjoError('drift_detected', 'Die Tagesansicht von projo hat ein unerwartetes Format.');
   // Dauer-Felder ohne erkennbare Buchungszeile → Zeilenformat geändert; nicht still „keine Buchungen“ melden
   if ($('[data-bip-attribute="duration_in_hour_min_str"]').filter((_, el) => $(el).closest('tr[id^="booking-"]').length === 0).length > 0) {
@@ -90,7 +102,14 @@ export function parseDayView($: CheerioAPI, date: string): DayView {
     if (!b) throw new ProjoError('drift_detected', `Buchungszeile ${id ?? '?'} ließ sich nicht lesen.`);
     bookings.push(b);
   }
-  return { date, bookings, totalHours: roundHours(bookings.reduce((s, b) => s + b.hours, 0)) };
+  // Sperre: Hinweis im Kopf; ohne Hinweis zur Sicherheit auch ein Tageskopf ohne Button „Zeitbuchung“ (Kopien zählen nicht)
+  const lockHint = $('#show h2 [title*="gesperrt"]').first().attr('title');
+  const lockNote = lockHint
+    ? cleanText(lockHint)
+    : header && $('a[href*="/app/bookings/new?date="]').length === 0
+      ? 'In projo gibt es für diesen Tag keinen Button „Zeitbuchung“ – vermutlich gesperrt.'
+      : undefined;
+  return { date, bookings, totalHours: roundHours(bookings.reduce((s, b) => s + b.hours, 0)), ...(lockNote ? { lockNote } : {}) };
 }
 
 export interface MonthSummaryItem {

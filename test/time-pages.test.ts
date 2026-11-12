@@ -27,8 +27,26 @@ describe('Tagesansicht', () => {
     expect(() => parseDayView(cheerio.load('<html><body><h1>Wartung</h1></body></html>'), '2026-03-10')).toThrowError(/unerwartetes Format/);
   });
 
-  it('liest Tage ohne Buchung im gesperrten Zeitraum als leer (ohne Button „Zeitbuchung“, kein Drift)', () => {
-    expect(parseDayView(load('day-locked.html'), '2026-10-26')).toEqual({ date: '2026-10-26', bookings: [], totalHours: 0 });
+  it('vervollständigt von projo gekürzte Leistungsnamen aus dem title', () => {
+    const $ = load('day.html');
+    $('#booking-900000001 span.label').text('1000-Projekt-01 - Planung ... Leistungsphase 2');
+    expect(parseDayView($, '2026-03-10').bookings[0]).toMatchObject({ label: '1000-Projekt-01 - Planung - Leistungsphase 2', task: 'Planung - Leistungsphase 2' });
+  });
+
+  it('liest Tage ohne Buchung im gesperrten Zeitraum als leer (ohne Button „Zeitbuchung“, kein Drift) und meldet die Sperre', () => {
+    expect(parseDayView(load('day-locked.html'), '2026-10-26')).toEqual({
+      date: '2026-10-26',
+      bookings: [],
+      totalHours: 0,
+      lockNote: 'Arbeitszeit im Persönlichen Bereich bis zum 31.10.2026 gesperrt. Änderungen können nur noch im Bürobereich vorgenommen werden (außer eigene).',
+    });
+    expect(parseDayView(load('day.html'), '2026-03-10').lockNote).toBeUndefined();
+  });
+
+  it('wertet einen Tageskopf ohne Button „Zeitbuchung“ auch ohne Sperrhinweis als gesperrt', () => {
+    const $ = load('day-locked.html');
+    $('#show h2 [title*="gesperrt"]').remove();
+    expect(parseDayView($, '2026-10-26').lockNote).toMatch(/keinen Button „Zeitbuchung“/);
   });
 
   it('meldet Drift, wenn der Tageskopf zu einem anderen Datum gehört', () => {
@@ -73,7 +91,7 @@ describe('Monatsansicht', () => {
     ]);
   });
 
-  it('liest Buchungen je Tag (voller Name aus title, gekürzte Anzeige bleibt label)', () => {
+  it('liest Buchungen je Tag (von projo gekürzte Anzeige aus dem title vervollständigt)', () => {
     expect(month.days).toHaveLength(1);
     const d = month.days[0]!;
     expect(d.date).toBe('2026-03-02');
@@ -81,7 +99,7 @@ describe('Monatsansicht', () => {
     expect(d.balance).toBe('+08:30 h');
     expect(d.bookings[1]).toEqual({
       hours: 10,
-      label: '1000-Projekt-01 - Planung - Leistu ... aner Haustechnik',
+      label: '1000-Projekt-01 - Planung - Leistungsphase 2 - Abstimmung Fachplaner Haustechnik',
       contract: '1000-Projekt-01',
       task: 'Planung - Leistungsphase 2 - Abstimmung Fachplaner Haustechnik',
       description: 'Termin vor Ort',

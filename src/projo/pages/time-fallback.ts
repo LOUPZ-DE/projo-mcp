@@ -1,6 +1,6 @@
 import { asArray, asNum, asObject, asStr, type ExtractSpec } from '../../harness/fallback.js';
 import { roundHours } from '../util/de.js';
-import type { Booking, DayView, HoursAnalysis, MonthView } from './time.js';
+import { completeLabel, type Booking, type DayView, type HoursAnalysis, type MonthView } from './time.js';
 
 /**
  * KI-Ausweich-Extraktion für die lesenden Zeit-Ansichten – gleiche Ergebnisformate wie die festen Parser.
@@ -26,17 +26,18 @@ const bookingSchema = (withId: boolean) => ({
 function toBooking(raw: unknown): Booking | undefined {
   const b = asObject(raw, 'Buchung');
   const hours = asNum(b.hours);
-  const label = asStr(b.label);
-  if (hours === undefined || !label) return undefined;
-  const i = label.indexOf(' - ');
+  const shown = asStr(b.label);
+  if (hours === undefined || !shown) return undefined;
+  const i = shown.indexOf(' - ');
   const id = asStr(b.id)?.replace(/^booking-/, '');
   const task = asStr(b.task);
   const description = asStr(b.description);
+  const label = completeLabel(shown, task);
   return {
     ...(id ? { id } : {}),
     hours: roundHours(hours),
     label,
-    ...(i > 0 ? { contract: label.slice(0, i) } : {}),
+    ...(i > 0 ? { contract: shown.slice(0, i) } : {}),
     ...(task ? { task } : {}),
     ...(description ? { description } : {}),
   };

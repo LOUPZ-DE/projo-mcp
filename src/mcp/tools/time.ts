@@ -1,11 +1,14 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { isProjoError } from '../../projo/errors.js';
+import type { Booking } from '../../projo/pages/time.js';
 import {
   commonLevels,
   createBooking,
+  createBookings,
   deleteBooking,
   hoursSummary,
+  MAX_BATCH,
   timeEntries,
   timeOptions,
   updateBooking,
@@ -15,7 +18,7 @@ import {
 import { audit, projoSessions } from '../../projo/runtime.js';
 import { todayBerlin } from '../../projo/util/de.js';
 import { respond } from '../respond.js';
-import { runTool, type Caller } from './common.js';
+import { CONNECT_CODES, connectHint, runTool, type Caller } from './common.js';
 
 const isoDate = (what: string) => z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Format YYYY-MM-DD').describe(what);
 const READ = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true } as const;
@@ -35,6 +38,9 @@ const taskView = (t: TaskOption, withContract: boolean, skipLevels: number) => {
     ...(t.complete ? {} : { truncated: true }),
   };
 };
+
+/** gebuchte Leistung kompakt: Name aus der Tagesansicht (dort vollständig), sonst aus der Auswahl */
+const bookedTask = (t: TaskOption, b: Booking) => ({ taskId: t.taskId, name: b.task ?? t.name });
 
 /** Schreibaktion protokollieren (ohne Beschreibungstexte) und Fehler weiterreichen. */
 async function audited<T extends WriteResult>(caller: Caller, action: string, details: Record<string, unknown>, fn: () => Promise<T>): Promise<T> {
@@ -176,10 +182,87 @@ export function registerTimeTools(server: McpServer): void {
           createBooking(projoSessions, caller.email, args),
         );
         return respond(
-          { status: r.status, booking: r.booking, ...(r.task ? { task: r.task } : {}), day: dayDigest(r) },
+          { status: r.status, booking: r.booking, ...(r.task ? { task: bookedTask(r.task, r.booking) } : {}), day: dayDigest(r) },
           r.status === 'already_exists'
             ? ['Eine identische Buchung existiert bereits – nichts angelegt. Nur bei Absicht mit allowDuplicate: true wiederholen.']
             : [`projo_time_entry_update with {"date": "${args.date}", "bookingId": "${r.booking.id}", "hours": <neu>} – falls korrigiert werden muss`],
+        );
+      }),
+  );
+
+  server.registerTool(
+    'projo_time_entry_create_batch',
+    {
+      title: 'projo: mehrere Arbeitszeiten buchen',
+      description:
+        `Bucht mehrere Arbeitszeiten in einem Aufruf (bis ${MAX_BATCH}, z. B. eine ganze Woche) – je Eintrag wie projo_time_entry_create: ` +
+        'taskId aus projo_time_options, Dauer im 15-Minuten-Raster, optional Beschreibung. Vorab werden alle Einträge geprüft; ist einer ungültig, ' +
+        'wird nichts gebucht. Dann wird der Reihe nach gebucht und jede Buchung in projo bestätigt. Bei einem Fehler stoppt der Aufruf; das Ergebnis ' +
+        'zeigt je Eintrag den Stand (created, already_exists, failed, skipped). Doppelbuchungsschutz wie beim Einzelaufruf.',
+      inputSchema: {
+        entries: z
+          .array(
+            z.object({
+              date: isoDate('Datum YYYY-MM-DD'),
+              taskId: z.string().regex(/^\d+$/, 'numerische taskId').describe('Leistung aus projo_time_options'),
+              hours: z.number().positive().max(24).describe('Dauer in Stunden, 15-Minuten-Raster, z. B. 2.5'),
+              description: z.string().max(2000).optional().describe('Rechnungskommentar / Beschreibung der Tätigkeit'),
+              allowDuplicate: z.boolean().optional().describe('identische Buchung trotzdem anlegen'),
+            }),
+          )
+          .min(1)
+          .max(MAX_BATCH)
+          .describe('Buchungen in der gewünschten Reihenfolge'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ entries }, extra) =>
+      runTool('projo_time_entry_create_batch', extra, async (caller) => {
+        const r = await createBookings(projoSessions, caller.email, entries).catch((err: unknown) => {
+          audit.write({ user: caller.email, action: 'time_entry.create_batch', result: 'error', details: { entries: entries.length }, error: isProjoError(err) ? `${err.code}: ${err.message}` : 'error' });
+          throw err;
+        });
+        // je Eintrag eine Audit-Zeile wie beim Einzelaufruf (ohne Beschreibungstexte)
+        for (const e of r.entries) {
+          if (e.status === 'skipped') continue;
+          const input = entries[e.index - 1]!;
+          audit.write({
+            user: caller.email,
+            action: 'time_entry.create',
+            result: e.status === 'failed' ? 'error' : 'ok',
+            details: { date: e.date, taskId: e.taskId, hours: input.hours, hasDescription: Boolean(input.description), batch: true, status: e.status, bookingId: e.booking?.id },
+            ...(e.error ? { error: `${e.error.code}: ${e.error.message}` } : {}),
+          });
+        }
+
+        const count = (status: string) => r.entries.filter((e) => e.status === status).length;
+        const next: string[] = [];
+        const failed = r.entries.find((e) => e.status === 'failed');
+        if (failed?.error) {
+          if (CONNECT_CODES.includes(failed.error.code)) next.push(connectHint());
+          next.push(
+            `Eintrag ${failed.index} wurde nicht gebucht (${failed.error.message}) – Ursache klären, dann die Einträge ab Eintrag ${failed.index} erneut übergeben; bereits Gebuchtes wird als already_exists erkannt.`,
+          );
+        }
+        if (count('already_exists') > 0) {
+          next.push(`${count('already_exists')} Einträge gab es schon identisch – nicht doppelt angelegt (allowDuplicate: true im Eintrag erzwingt es).`);
+        }
+        if (count('created') > 0) next.push('Korrekturen einzeln mit projo_time_entry_update (bookingId aus entries[].booking.id).');
+        return respond(
+          {
+            summary: { created: count('created'), already_exists: count('already_exists'), failed: count('failed'), skipped: count('skipped') },
+            entries: r.entries.map((e) => ({
+              index: e.index,
+              date: e.date,
+              status: e.status,
+              ...(e.booking
+                ? { booking: { id: e.booking.id, hours: e.booking.hours, label: e.booking.label, ...(e.booking.description ? { description: e.booking.description } : {}) } }
+                : { taskId: e.taskId }),
+              ...(e.error ? { error: e.error } : {}),
+            })),
+            days: r.days.map((d) => ({ date: d.date, totalHours: d.totalHours, bookings: d.bookings.length })),
+          },
+          next,
         );
       }),
   );

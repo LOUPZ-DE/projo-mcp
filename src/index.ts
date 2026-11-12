@@ -126,7 +126,7 @@ app.get('/', (_req, res) => {
     <div class="meta">
       Im MCP-Client (Claude, Notion …) die <b>MCP-Endpoint-URL inkl. /mcp</b> als Custom Connector eintragen.
       Tools: <code>projo_status</code> · <code>projo_read_page</code> · <code>projo_time_entries</code> · <code>projo_time_summary</code> ·
-      <code>projo_time_options</code> · <code>projo_time_entry_create</code> · <code>projo_time_entry_update</code> · <code>projo_time_entry_delete</code>
+      <code>projo_time_options</code> · <code>projo_time_entry_create</code> · <code>projo_time_entry_create_batch</code> · <code>projo_time_entry_update</code> · <code>projo_time_entry_delete</code>
     </div>`;
   res.set('Cache-Control', 'no-store').status(200).send(widePage('Info', body));
 });

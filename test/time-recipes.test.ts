@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { driftDir } from '../src/harness/drift.js';
-import { commonLevels, createBooking, deleteBooking, timeEntries, timeOptions, updateBooking } from '../src/projo/recipes/time.js';
+import { commonLevels, createBooking, createBookings, deleteBooking, timeEntries, timeOptions, updateBooking } from '../src/projo/recipes/time.js';
 import { ProjoSessionManager } from '../src/projo/session.js';
 import { Vault } from '../src/projo/vault.js';
 import { startFakeProjo, type FakeProjo } from './fake-projo/server.js';
@@ -39,6 +39,8 @@ beforeEach(async () => {
   fake.state.rejectCsrf = false;
   fake.state.treeBroken = false;
   fake.state.lockedDays.clear();
+  fake.state.rejectTask = undefined;
+  fake.state.expireAfterCreate = false;
   // eine vorhandene Buchung → Gesamtliste der Leistungen per edit_task verfügbar
   fake.seedBooking({ date: DATE, taskId: '6000001', minutes: 120 });
   const vault = new Vault(join(mkdtempSync(join(tmpdir(), 'time-')), 'vault'), randomBytes(32));
@@ -153,6 +155,104 @@ describe('Leistungen finden', () => {
     expect(r.tasks.map((t) => [t.taskId, t.number])).toEqual([['6100001', undefined]]);
     expect(fake.activeTreaty()).toBe('700002');
     expect(readdirSync(driftDir()).some((f) => f.endsWith('time_tree.html'))).toBe(true);
+  });
+});
+
+describe('Mehrere Buchungen auf einmal', () => {
+  it('bucht über mehrere Tage, bestätigt jede Buchung und meldet die Tagessummen', async () => {
+    const r = await createBookings(mgr, USER, [
+      { date: DATE, taskId: '6000002', hours: 1, description: 'Support' },
+      { date: DATE, taskId: '6100004', hours: 2.5 },
+      { date: '2026-03-11', taskId: '6000003', hours: 4, description: 'Werkzeug' },
+    ]);
+    expect(r.entries.map((e) => [e.index, e.status, e.booking?.hours])).toEqual([
+      [1, 'created', 1],
+      [2, 'created', 2.5],
+      [3, 'created', 4],
+    ]);
+    expect(r.entries[1]!.booking!.label).toBe('1000-Projekt-01 - Leistungsstufe 2 - Kostenmanagement - Kostenkontrolle - Standort Nord');
+    expect(r.days.map((d) => [d.date, d.totalHours])).toEqual([
+      [DATE, 5.5], // 2 h vorhanden + 1 h + 2,5 h
+      ['2026-03-11', 4],
+    ]);
+    expect(fake.bookings.size).toBe(4);
+    expect(fake.activeTreaty()).toBe('700002');
+  });
+
+  it('prüft alles vorab – bei einem ungültigen Eintrag wird nichts gebucht', async () => {
+    const format = await createBookings(mgr, USER, [
+      { date: DATE, taskId: '6000002', hours: 1 },
+      { date: DATE, taskId: '6000002', hours: 1.3 },
+    ]).catch((e: unknown) => e);
+    expect(format).toMatchObject({ code: 'invalid_input', message: expect.stringMatching(/^Nichts gebucht – Eintrag 2:/) });
+    const unknownTask = await createBookings(mgr, USER, [
+      { date: DATE, taskId: '6000002', hours: 1 },
+      { date: DATE, taskId: '999', hours: 1 },
+    ]).catch((e: unknown) => e);
+    expect(unknownTask).toMatchObject({ code: 'invalid_input', message: expect.stringMatching(/Eintrag 2: Die Leistung 999/) });
+    await expect(createBookings(mgr, USER, Array.from({ length: 26 }, () => ({ date: DATE, taskId: '6000002', hours: 1 })))).rejects.toMatchObject({ code: 'invalid_input' });
+    // Zukunft nimmt projo nicht an – vorab abgelehnt statt mittendrin
+    const future = await createBookings(mgr, USER, [
+      { date: DATE, taskId: '6000002', hours: 1 },
+      { date: '2099-01-05', taskId: '6000002', hours: 1 },
+    ]).catch((e: unknown) => e);
+    expect(future).toMatchObject({ code: 'invalid_input', message: expect.stringMatching(/Eintrag 2: Arbeitszeit in der Zukunft/) });
+    await expect(createBooking(mgr, USER, { date: '2099-01-05', taskId: '6000002', hours: 1 })).rejects.toMatchObject({ code: 'invalid_input' });
+    expect(fake.bookings.size).toBe(1);
+  });
+
+  it('stoppt beim ersten Fehler – erneutes Übergeben bucht nichts doppelt', async () => {
+    fake.state.rejectTask = '6000003';
+    const entries = [
+      { date: DATE, taskId: '6000002', hours: 1 },
+      { date: DATE, taskId: '6000003', hours: 2 },
+      { date: DATE, taskId: '6000002', hours: 0.5 },
+    ];
+    const r = await createBookings(mgr, USER, entries);
+    expect(r.entries.map((e) => e.status)).toEqual(['created', 'failed', 'skipped']);
+    expect(r.entries[1]!.error).toMatchObject({ code: 'validation_failed', message: expect.stringContaining('nicht mehr gebucht') });
+    expect(fake.bookings.size).toBe(2);
+
+    fake.state.rejectTask = undefined;
+    const again = await createBookings(mgr, USER, entries);
+    expect(again.entries.map((e) => e.status)).toEqual(['already_exists', 'created', 'created']);
+    expect(fake.bookings.size).toBe(4);
+  });
+
+  it('erkennt identische Einträge im selben Aufruf (außer mit allowDuplicate)', async () => {
+    const r = await createBookings(mgr, USER, [
+      { date: DATE, taskId: '6000002', hours: 1, description: 'Abstimmung' },
+      { date: DATE, taskId: '6000002', hours: 1, description: 'Abstimmung' },
+      { date: DATE, taskId: '6000002', hours: 1, description: 'Abstimmung', allowDuplicate: true },
+    ]);
+    expect(r.entries.map((e) => e.status)).toEqual(['created', 'already_exists', 'created']);
+    expect(fake.bookings.size).toBe(3);
+  });
+
+  it('bucht nie in gesperrte Zeiträume – projo selbst würde annehmen', async () => {
+    fake.state.lockedDays.add('2026-03-12');
+    await expect(createBooking(mgr, USER, { date: '2026-03-12', taskId: '6000002', hours: 1 })).rejects.toMatchObject({
+      code: 'validation_failed',
+      message: expect.stringContaining('bis zum 31.10.2026 gesperrt'),
+    });
+    const batch = await createBookings(mgr, USER, [
+      { date: DATE, taskId: '6000002', hours: 1 },
+      { date: '2026-03-12', taskId: '6000002', hours: 1 },
+    ]).catch((e: unknown) => e);
+    expect(batch).toMatchObject({ code: 'invalid_input', message: expect.stringMatching(/^Nichts gebucht – Eintrag 2 \(2026-03-12\): Arbeitszeit/) });
+    expect(fake.bookings.size).toBe(1);
+  });
+
+  it('meldet bereits Gebuchtes auch, wenn die Sitzung unterwegs abläuft', async () => {
+    fake.state.expireAfterCreate = true;
+    const r = await createBookings(mgr, USER, [
+      { date: DATE, taskId: '6000002', hours: 1 },
+      { date: DATE, taskId: '6000003', hours: 1 },
+      { date: DATE, taskId: '6000002', hours: 2 },
+    ]);
+    expect(r.entries.map((e) => e.status)).toEqual(['created', 'failed', 'skipped']);
+    expect(r.entries[1]!.error?.code).toBe('projo_login_required');
+    expect(fake.bookings.size).toBe(2);
   });
 });
 

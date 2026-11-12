@@ -13,7 +13,7 @@ import { registerProjoTools } from './tools/index.js';
 const INSTRUCTIONS = [
   'Dieser Server bedient die Controlling-Software projo (my.projo.berlin) mit dem eigenen projo-Konto der angemeldeten Person.',
   'Ablauf: 1) projo_status aufrufen (arguments={}). 2) Ist kein projo-Konto verbunden oder die Sitzung abgelaufen, der Person den connectUrl-Link nennen – sie verbindet ihr Konto dort im Browser; niemals Passwörter oder Codes im Chat erfragen. 3) Danach die fachlichen Tools nutzen; für Ansichten ohne eigenes Tool projo_read_page mit einem projo-Pfad.',
-  'Zeiten: lesen mit projo_time_entries (Tag/Zeitraum) bzw. projo_time_summary (Stunden pro Projekt); buchen: projo_time_options (query oder contract) → taskId → projo_time_entry_create; ändern/löschen braucht die bookingId aus projo_time_entries (Zeitraum bis 10 Tage). Vor dem Buchen Datum, Dauer und Leistung mit der Person abstimmen, wenn sie nicht eindeutig sind.',
+  'Zeiten: lesen mit projo_time_entries (Tag/Zeitraum) bzw. projo_time_summary (Stunden pro Projekt); buchen: projo_time_options (query oder contract) → taskId → projo_time_entry_create (mehrere Buchungen auf einmal, z. B. eine Woche: projo_time_entry_create_batch); ändern/löschen braucht die bookingId aus projo_time_entries (Zeitraum bis 10 Tage). Vor dem Buchen Datum, Dauer und Leistung mit der Person abstimmen, wenn sie nicht eindeutig sind.',
   'Regeln: Daten im ISO-Format (YYYY-MM-DD), Stunden dezimal. Links mit "method" (patch/delete/post) sind Aktionen und werden nie über projo_read_page ausgelöst. Antworten sind JSON; ein "nextSteps"-Feld nennt sinnvolle Folgeaufrufe, ein "error"-Feld enthält code, message und ggf. connectUrl.',
 ].join(' ');
 

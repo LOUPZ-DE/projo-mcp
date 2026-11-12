@@ -25,9 +25,10 @@ export interface FakeProjo {
   bookings: Map<string, FakeBooking>;
   /**
    * rejectCsrf: Writes immer wie bei ungültigem CSRF-Token beantworten; treeBroken: Leistungsbaum mit fremdem Format;
-   * lockedDays: Tage im gesperrten Zeitraum ohne Buchung (kein Button „Zeitbuchung“)
+   * lockedDays: Tage im gesperrten Zeitraum ohne Buchung (kein Button „Zeitbuchung“); rejectTask: Buchungen auf
+   * diese Leistung lehnt projo mit Formularfehler ab; expireAfterCreate: nach jeder Buchung alle Sitzungen beenden
    */
-  state: { rejectCsrf: boolean; treeBroken: boolean; lockedDays: Set<string> };
+  state: { rejectCsrf: boolean; treeBroken: boolean; lockedDays: Set<string>; rejectTask?: string; expireAfterCreate?: boolean };
   /** aktuell gefilterter Vertrag (treatyId) */
   activeTreaty(): string | undefined;
   seedBooking(b: Omit<FakeBooking, 'id' | 'description'> & { description?: string }): string;
@@ -203,7 +204,7 @@ export async function startFakeProjo(): Promise<FakeProjo> {
     }
     return true;
   };
-  const state = { rejectCsrf: false, treeBroken: false, lockedDays: new Set<string>() };
+  const state: FakeProjo['state'] = { rejectCsrf: false, treeBroken: false, lockedDays: new Set<string>() };
 
   app.get('/app/dates/:date', requireAuth, (req, res) => {
     const date = String(req.params.date);
@@ -248,6 +249,10 @@ export async function startFakeProjo(): Promise<FakeProjo> {
     if (!csrfOk(req, res)) return;
     const date = String(req.query.date);
     const body = req.body as Record<string, string>;
+    if (state.rejectTask && body['time_tracking_booking[task_id]'] === state.rejectTask) {
+      res.status(422).send('<div class="invalid-feedback">Auf diese Leistung kann nicht mehr gebucht werden.</div>');
+      return;
+    }
     const id = String(nextId++);
     bookings.set(id, {
       id,
@@ -256,6 +261,7 @@ export async function startFakeProjo(): Promise<FakeProjo> {
       minutes: parseHm(body['time_tracking_booking[duration_in_hour_min_str]']) ?? 0,
       description: (body['time_tracking_booking[description]'] ?? '').trim(),
     });
+    if (state.expireAfterCreate) for (const s of sessions.values()) s.auth = false;
     res.type('text/javascript').send(showJs(date));
   });
 

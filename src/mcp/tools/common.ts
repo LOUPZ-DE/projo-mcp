@@ -28,7 +28,8 @@ export function callerOf(extra: ToolExtra): Caller {
   };
 }
 
-const CONNECT_CODES: ProjoErrorCode[] = ['projo_not_connected', 'projo_login_required', 'projo_login_failed'];
+/** Fehler, die nur die Person selbst über die Verbindungsseite beheben kann */
+export const CONNECT_CODES: string[] = ['projo_not_connected', 'projo_login_required', 'projo_login_failed'] satisfies ProjoErrorCode[];
 
 export const connectHint = (): string =>
   `Bitte die Person bitten, ${config.CONNECT_URL} im Browser zu öffnen und dort ihr projo-Konto zu verbinden (Zugangsdaten nie im Chat abfragen); danach projo_status aufrufen.`;
